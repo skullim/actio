@@ -1,0 +1,9 @@
+[package]
+name = "actio"
+version = "0.1.0"
+description = "Framework for long-running async actions: feedback stream, cancellation, and terminal result. Implementation details in the upcoming release."
+license = "MIT/Apache-2.0"
+edition = "2024"
+
+
+[dependencies]
