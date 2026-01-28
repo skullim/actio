@@ -1,4 +1,13 @@
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
+
+pub struct SimpleTask<F> {
+    pub task: F,
+}
+
+pub struct TaskWithFeedback<F, Fb> {
+    pub task: F,
+    pub feedback_rx: mpsc::Receiver<Fb>,
+}
 
 pub struct TaskHandle<R> {
     cancel_sender: oneshot::Sender<()>,
@@ -21,5 +30,25 @@ impl<R> TaskHandle<R> {
 
     pub async fn await_response(self) -> R {
         self.result_receiver.await.unwrap()
+    }
+}
+
+pub struct TaskHandleWithFeedback<R, Fb> {
+    pub cancel: oneshot::Sender<()>,
+    pub result: oneshot::Receiver<R>,
+    pub feedback: mpsc::Receiver<Fb>,
+}
+
+impl<R, Fb> TaskHandleWithFeedback<R, Fb> {
+    pub fn new(
+        cancel: oneshot::Sender<()>,
+        result: oneshot::Receiver<R>,
+        feedback: mpsc::Receiver<Fb>,
+    ) -> Self {
+        Self {
+            cancel,
+            result,
+            feedback,
+        }
     }
 }
