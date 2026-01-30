@@ -4,7 +4,6 @@ pub mod builder;
 pub mod execution;
 pub mod scheduling;
 pub mod server;
-pub mod task;
 
-type TaskBox = Box<dyn Future<Output = ()>>;
+type TaskBox = Box<dyn Future<Output = ()> + Send + 'static>;
 pub(crate) type PinnedTask = Pin<TaskBox>;
