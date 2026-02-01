@@ -1,9 +1,11 @@
 use std::marker::PhantomData;
 
-use crate::server::{Outcome, TaskStateSnapshotReceiver, VisitOutcome, WithFeedback};
+use crate::server::{
+    Outcome, ServerOutcome, TaskStateSnapshotReceiver, VisitOutcome, WithFeedback,
+};
 use crate::{PinnedTask, server::ServerConcept};
 use anyhow::anyhow;
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 
 #[derive(Debug)]
@@ -12,21 +14,19 @@ pub enum Error {
     RejectedByExecutor,
 }
 
-pub trait ScheduleTask<G, S> {
+pub trait SubmitGoal<G> {
     type TaskHandle;
+    type Server: ServerConcept;
 
-    fn schedule(&mut self, server: &mut S, goal: G) -> Result<Self::TaskHandle, Error>;
+    fn submit(&mut self, server: &mut Self::Server, goal: G) -> Result<Self::TaskHandle, Error>;
 }
 
-pub struct GenericScheduler<A, RF, CF> {
+pub struct GoalSubmitter<S, CF> {
     task_sender: Sender<PinnedTask>,
-    phantom: PhantomData<(A, RF, CF)>,
+    phantom: PhantomData<(S, CF)>,
 }
 
-impl<A, RF, CF> GenericScheduler<A, RF, CF>
-where
-    A: ActionInterface,
-{
+impl<S, CF> GoalSubmitter<S, CF> {
     pub fn new(task_sender: Sender<PinnedTask>) -> Self {
         Self {
             task_sender,
@@ -35,27 +35,17 @@ where
     }
 }
 
-//@todo would be better if higher layer already provides outcome = Outcome<A::Succeed, A::Cancelled, A::Failed>;
-impl<A, S, RF, CF> ScheduleTask<A::Goal, S> for GenericScheduler<A, RF, CF>
+impl<S, CF> SubmitGoal<S::Goal> for GoalSubmitter<S, CF>
 where
-    A: ActionInterface,
-    S: ServerConcept<
-            Goal = A::Goal,
-            SucceedOutput = A::Succeed,
-            CancelledOutput = A::Cancelled,
-            FailedOutput = A::Failed,
-        >,
-    RF: MandatoryChannelFactory<Outcome<A::Succeed, A::Cancelled, A::Failed>>,
-    CF: CancelChannelFactory<Output = A::Cancelled>,
+    S: ServerConcept,
+    CF: CancelChannelFactory,
 {
-    type TaskHandle = TaskHandle<
-        oneshot::Receiver<Outcome<A::Succeed, A::Cancelled, A::Failed>>,
-        tokio::sync::mpsc::Sender<A::Cancelled>,
-        S::FeedbackConfig,
-    >;
-    fn schedule(&mut self, server: &mut S, goal: A::Goal) -> Result<Self::TaskHandle, Error> {
-        let (result_sender, result_receiver) = RF::channel();
-        let (cancel_sender, mut cancel_receiver) = CF::channel();
+    type Server = S;
+    type TaskHandle = PubTaskHandle<S, CF>;
+
+    fn submit(&mut self, server: &mut S, goal: S::Goal) -> Result<Self::TaskHandle, Error> {
+        let (result_sender, result_receiver) = ResultChannelFactory::channel::<ServerOutcome<S>>();
+        let (cancel_sender, cancel_receiver) = CF::channel();
 
         let task_with_ctx = server.create(goal);
         let task = task_with_ctx.task;
@@ -65,11 +55,10 @@ where
         let task = async move {
             let outcome = tokio::select! {
                 _ = cancel_receiver.recv() => {
-
                     let snapshot = task_state_snapshot_receiver.recv();
                     Outcome::Cancelled(snapshot)
                 }
-                r = task => { r }
+                r = task => r,
             };
             let _ = result_sender.send(outcome);
         };
@@ -86,11 +75,12 @@ where
     }
 }
 
-pub trait ActionInterface {
-    type Goal;
-    type Succeed: 'static + Send;
-    type Cancelled: 'static + Send;
-    type Failed: 'static + Send;
+struct ResultChannelFactory;
+
+impl ResultChannelFactory {
+    fn channel<O>() -> (oneshot::Sender<O>, oneshot::Receiver<O>) {
+        tokio::sync::oneshot::channel()
+    }
 }
 
 // Capabilities that change the server async task
@@ -109,6 +99,12 @@ pub trait ActionInterface {
 // 2. cancel sender (opt)
 // 3. feedback receiver (opt)
 // 4. act as wrapper to await result, but let server visit result (supports stateful server) (opt)
+
+pub type PubTaskHandle<S, CF> = TaskHandle<
+    tokio::sync::oneshot::Receiver<ServerOutcome<S>>,
+    <CF as CancelChannelFactory>::Sender,
+    <S as ServerConcept>::FeedbackConfig,
+>;
 
 pub struct TaskHandle<R, C, F> {
     result_receiver: R,
@@ -181,32 +177,84 @@ impl<R, C, Rx> TaskHandle<R, C, WithFeedback<Rx>> {
     }
 }
 
-pub trait MandatoryChannelFactory<O> {
-    //@todo use traits for sender and receiver and return impl pair
-    fn channel() -> (oneshot::Sender<O>, oneshot::Receiver<O>);
+pub trait CancelChannelFactory {
+    type Sender;
+    fn channel() -> (Self::Sender, impl CancelReceiver);
 }
 
-pub trait CancelChannelFactory {
-    type Output;
-    #[allow(clippy::type_complexity)]
-    fn channel() -> (Sender<Self::Output>, Receiver<Self::Output>);
+pub trait CancelReceiver: Send + 'static {
+    fn recv(self) -> impl Future<Output = ()> + Send + 'static;
+}
+
+impl CancelReceiver for oneshot::Receiver<()> {
+    async fn recv(self) {
+        self.await.unwrap()
+    }
+}
+
+pub struct NoCancelReceiver;
+
+impl CancelReceiver for NoCancelReceiver {
+    async fn recv(self) {
+        std::future::pending::<()>().await
+    }
+}
+
+pub struct NoCancelChannel;
+
+impl CancelChannelFactory for NoCancelChannel {
+    type Sender = ();
+    fn channel() -> (Self::Sender, impl CancelReceiver) {
+        ((), NoCancelReceiver)
+    }
 }
 
 pub struct CancelChannel;
 
 impl CancelChannelFactory for CancelChannel {
-    type Output = ();
-    fn channel() -> (Sender<Self::Output>, Receiver<Self::Output>) {
-        tokio::sync::mpsc::channel(1)
+    type Sender = oneshot::Sender<()>;
+    fn channel() -> (Self::Sender, impl CancelReceiver) {
+        tokio::sync::oneshot::channel()
     }
 }
 
-pub trait AwaitResult {
-    type Result;
+pub struct StatefulTaskHandle<S, CF>
+where
+    S: ServerConcept,
+    CF: CancelChannelFactory,
+{
+    handle: PubTaskHandle<S, CF>,
 }
 
-pub trait AwaitVisitableResult {
-    type Result;
-    type Visitor: VisitOutcome;
-    fn await_and_visit(&self, visitor: &mut Self::Visitor) -> Self::Result;
+impl<S, CF> StatefulTaskHandle<S, CF>
+where
+    S: ServerConcept,
+    CF: CancelChannelFactory,
+{
+    pub async fn await_result<'a>(
+        self,
+        server: &'a mut S,
+    ) -> VisitableResult<'a, S, ServerOutcome<S>>
+    where
+        S: VisitOutcome,
+    {
+        let receiver = self.handle.into_result_receiver();
+        VisitableResult { server, receiver }
+    }
+}
+
+pub struct VisitableResult<'a, S, O> {
+    server: &'a mut S,
+    receiver: oneshot::Receiver<O>,
+}
+
+impl<'a, S> VisitableResult<'a, S, ServerOutcome<S>>
+where
+    S: VisitOutcome,
+{
+    pub async fn await_result(self) -> ServerOutcome<S> {
+        let outcome = self.receiver.await.unwrap();
+        self.server.visit(&outcome);
+        outcome
+    }
 }

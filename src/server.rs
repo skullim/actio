@@ -7,29 +7,32 @@ pub enum Outcome<S, TEX, F> {
     Failed(F),
 }
 
-pub type PinnedOutcomeFut<S, C, F> =
-    Pin<Box<dyn Future<Output = Outcome<S, C, F>> + Send + 'static>>;
+pub type ServerOutcome<S> = Outcome<
+    <S as ServerConcept>::SucceedOutput,
+    ServerSnapshot<S>,
+    <S as ServerConcept>::FailedOutput,
+>;
+
+pub type ServerSnapshot<S> =
+    <<S as ServerConcept>::TaskStateConfig as TaskStateSnapshotReceiver>::TaskStateSnapshot;
+
+pub type PinnedOutcomeFut<S> = Pin<Box<dyn Future<Output = ServerOutcome<S>> + Send + 'static>>;
+
+pub type ServerTask<S> = TaskWithContext<
+    PinnedOutcomeFut<S>,
+    <S as ServerConcept>::FeedbackConfig,
+    <S as ServerConcept>::TaskStateConfig,
+>;
 
 pub trait ServerConcept {
-    type Goal;
-    type SucceedOutput;
-    type CancelledOutput;
-    type FailedOutput;
+    type Goal: Send + 'static;
+    type SucceedOutput: Send + 'static;
+    type FailedOutput: Send + 'static;
 
     type FeedbackConfig: FeedbackConfigMarker + Send + 'static;
-    type TaskStateConfig: TaskStateSnapshotReceiver<TaskStateSnapshot = Self::CancelledOutput>
-        + Send
-        + 'static;
+    type TaskStateConfig: TaskStateSnapshotReceiver + Send + 'static;
 
-    #[allow(clippy::type_complexity)]
-    fn create(
-        &mut self,
-        goal: Self::Goal,
-    ) -> TaskWithContext<
-        PinnedOutcomeFut<Self::SucceedOutput, Self::CancelledOutput, Self::FailedOutput>,
-        Self::FeedbackConfig,
-        Self::TaskStateConfig,
-    >;
+    fn create(&mut self, goal: Self::Goal) -> ServerTask<Self>;
 }
 
 //@todo needs sealing as this should not be visible outside
@@ -47,7 +50,7 @@ impl<T> FeedbackReceiverMarker for tokio::sync::watch::Receiver<T> {}
 
 //@todo needs sealing as this should not be visible outside
 pub trait TaskStateSnapshotReceiver {
-    type TaskStateSnapshot;
+    type TaskStateSnapshot: Send + 'static;
     fn recv(&mut self) -> Self::TaskStateSnapshot;
 }
 pub struct NoTaskStateSnapshot;
@@ -71,7 +74,7 @@ where
 // concrete external receivers implementations
 impl<T> TaskStateSnapshotReceiver for tokio::sync::watch::Receiver<T>
 where
-    T: Clone,
+    T: Clone + Send + 'static,
 {
     type TaskStateSnapshot = T;
     fn recv(&mut self) -> Self::TaskStateSnapshot {
@@ -136,21 +139,14 @@ impl<T, FR, TR> TaskWithContext<T, WithFeedback<FR>, WithTaskStateSnapshot<TR>> 
 
 pub struct StatefulServer;
 
-pub trait VisitOutcome {
-    type SucceedOutput;
-    type CancelledOutput;
-    type FailedOutput;
-    //@todo add Result
-
-    // by default do nothing unless explicitly implemented by the user
+pub trait VisitOutcome: ServerConcept {
+    // user implements methods that is interested in
     fn on_succeed(&mut self, _o: &Self::SucceedOutput) {}
-    fn on_cancelled(&mut self, _o: &Self::CancelledOutput) {}
+    fn on_cancelled(&mut self, _o: &ServerSnapshot<Self>) {}
     fn on_failed(&mut self, _o: &Self::FailedOutput) {}
 
-    fn visit(
-        &mut self,
-        outcome: &Outcome<Self::SucceedOutput, Self::CancelledOutput, Self::FailedOutput>,
-    ) {
+    //@todo add Result
+    fn visit(&mut self, outcome: &ServerOutcome<Self>) {
         match outcome {
             Outcome::Succeed(s) => self.on_succeed(s),
             Outcome::Cancelled(c) => self.on_cancelled(c),
@@ -161,68 +157,113 @@ pub trait VisitOutcome {
 
 #[cfg(test)]
 mod tests {
-    use crate::{builder::Builder, scheduling::ScheduleTask};
-
     use super::*;
+    use crate::{
+        factory::Factory,
+        submitting::{NoCancelChannel, SubmitGoal},
+    };
 
     #[derive(Default)]
     pub struct MyGoal {
         pub target: String,
     }
 
-    pub struct MySucceedOutput {
+    pub struct MySucceedOutputA {
         result: i32,
     }
-
-    pub struct MyFailedOutput {
+    pub struct MyFailedOutputA {
         error: String,
     }
 
-    pub struct MyServer;
-    type MyOutcome = Outcome<MySucceedOutput, NoTaskStateSnapshot, MyFailedOutput>;
+    pub struct MySucceedOutputB {
+        bytes: usize,
+    }
+    pub struct MyFailedOutputB {
+        code: u32,
+    }
 
-    impl ServerConcept for MyServer {
+    pub struct MyServerA;
+    pub struct MyServerB;
+
+    impl ServerConcept for MyServerA {
         type Goal = MyGoal;
-        type SucceedOutput = MySucceedOutput;
-        type CancelledOutput = ();
-        type FailedOutput = MyFailedOutput;
+        type SucceedOutput = MySucceedOutputA;
+        type FailedOutput = MyFailedOutputA;
 
         type FeedbackConfig = NoFeedback;
         type TaskStateConfig = NoTaskStateSnapshot;
 
-        fn create(
-            &mut self,
-            goal: Self::Goal,
-        ) -> TaskWithContext<
-            PinnedOutcomeFut<Self::SucceedOutput, Self::CancelledOutput, Self::FailedOutput>,
-            NoFeedback,
-            NoTaskStateSnapshot,
-        > {
+        fn create(&mut self, goal: Self::Goal) -> ServerTask<Self> {
             let task = async move {
-                let result = do_work(&goal.target).await;
-                Outcome::Succeed(MySucceedOutput { result })
+                let result = do_work_a(&goal.target).await;
+                Outcome::Succeed(MySucceedOutputA { result })
             };
-
-            //@todo find a way that allows to avoid writing types here
-            TaskWithContext::<_, NoFeedback, NoTaskStateSnapshot>::new(Box::pin(task))
+            ServerTask::<Self>::new(Box::pin(task))
         }
     }
 
-    async fn do_work(_target: &str) -> i32 {
-        42
+    impl ServerConcept for MyServerB {
+        type Goal = MyGoal;
+        type SucceedOutput = MySucceedOutputB;
+        type FailedOutput = MyFailedOutputB;
+
+        type FeedbackConfig = NoFeedback;
+        type TaskStateConfig = NoTaskStateSnapshot;
+
+        fn create(&mut self, goal: Self::Goal) -> ServerTask<Self> {
+            let task = async move {
+                let bytes = do_work_b(&goal.target).await;
+                Outcome::Succeed(MySucceedOutputB { bytes })
+            };
+            ServerTask::<Self>::new(Box::pin(task))
+        }
     }
 
-    // #[tokio::test]
-    // async fn test_build() {
-    //     let mut server = MyServer {};
-    //     let (mut scheduler, executor) = Builder::with_simple_task::<MyOutcome, MyServer>();
+    async fn do_work_a(_target: &str) -> i32 {
+        42
+    }
+    async fn do_work_b(target: &str) -> usize {
+        target.len()
+    }
 
-    //     let exec_task = async move {
-    //         let mut executor = executor;
-    //         executor.execute().await
-    //     };
-    //     tokio::spawn(exec_task);
-    //     let handle = scheduler.schedule(&mut server, MyGoal::default()).unwrap();
-    //     let _response = handle.await_response().await;
-    // }
+    #[tokio::test]
+    async fn test_two_servers_same_goal() {
+        let mut server_a = MyServerA {};
+        let (mut submitter_a, executor_a) = Factory::instantiate::<MyServerA, NoCancelChannel>();
+
+        tokio::spawn(async move {
+            let mut executor_a = executor_a;
+            executor_a.execute().await
+        });
+
+        let handle_a = submitter_a
+            .submit(&mut server_a, MyGoal::default())
+            .unwrap();
+        let out_a = handle_a.into_result_receiver().await.unwrap();
+
+        match out_a {
+            Outcome::Succeed(_s) => {}
+            Outcome::Cancelled(_) => panic!("unexpected cancel"),
+            Outcome::Failed(_) => panic!("unexpected failure"),
+        }
+
+        let mut server_b = MyServerB {};
+        let (mut submitter_b, executor_b) = Factory::instantiate::<MyServerB, NoCancelChannel>();
+
+        tokio::spawn(async move {
+            let mut executor_b = executor_b;
+            executor_b.execute().await
+        });
+
+        let handle_b = submitter_b
+            .submit(&mut server_b, MyGoal::default())
+            .unwrap();
+        let out_b = handle_b.into_result_receiver().await.unwrap();
+
+        match out_b {
+            Outcome::Succeed(_s) => {}
+            Outcome::Cancelled(_) => panic!("unexpected cancel"),
+            Outcome::Failed(_) => panic!("unexpected failure"),
+        }
+    }
 }
