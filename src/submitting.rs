@@ -67,12 +67,12 @@ where
         let task_with_ctx = server.create(goal);
         let task = task_with_ctx.task;
         let feedback_receiver = task_with_ctx.feedback_receiver;
-        let mut task_state_snapshot_receiver = task_with_ctx.task_state_snapshot_receiver;
+        let mut snapshot_receiver = task_with_ctx.task_state_snapshot_receiver;
 
         let task = async move {
             let outcome = tokio::select! {
                 _ = cancel_receiver.recv() => {
-                    let snapshot = task_state_snapshot_receiver.recv();
+                    let snapshot = snapshot_receiver.recv();
                     Outcome::Cancelled(snapshot)
                 }
                 r = task => r,
@@ -135,7 +135,13 @@ pub trait CancelReceiver: Send + 'static {
 
 impl CancelReceiver for oneshot::Receiver<()> {
     async fn recv(self) {
-        self.await.unwrap()
+        // error only occurs if sender has been dropped.
+        // However this can happen only if the client is not interested in cancelling the task,
+        // hence at this stage the cancel capability is downgraded into NoCancel
+        if self.await.is_err() {
+            let downgraded = NoCancelReceiver {};
+            downgraded.recv().await
+        }
     }
 }
 
@@ -143,7 +149,7 @@ pub struct NoCancelReceiver;
 
 impl CancelReceiver for NoCancelReceiver {
     async fn recv(self) {
-        std::future::pending::<()>().await
+        std::future::pending::<()>().await;
     }
 }
 

@@ -26,13 +26,13 @@ impl<R, C, F> GenericTaskHandle<R, C, F> {
         }
     }
 
-    pub fn result_receiver(&self) -> &R {
-        &self.result_receiver
-    }
+    // pub fn result_receiver(&self) -> &R {
+    //     &self.result_receiver
+    // }
 
-    pub fn result_receiver_mut(&mut self) -> &mut R {
-        &mut self.result_receiver
-    }
+    // pub fn result_receiver_mut(&mut self) -> &mut R {
+    //     &mut self.result_receiver
+    // }
 
     pub fn into_result_receiver(self) -> R {
         self.result_receiver
@@ -111,7 +111,7 @@ where
         Self { handle }
     }
 
-    pub async fn await_result<'a>(
+    pub fn into_visitable_result<'a>(
         self,
         server: &'a mut S,
     ) -> VisitableResult<'a, S, ServerOutcome<S>>

@@ -181,6 +181,7 @@ mock! {
         fn on_succeed(&mut self, o: &<MockVisitOutcomeMock as ServerConcept>::SucceedOutput);
         fn on_cancelled(&mut self, o: &ServerSnapshot<Self>);
         fn on_failed(&mut self, o: &<MockVisitOutcomeMock as ServerConcept>::FailedOutput);
+        fn visit(&mut self, outcome: &ServerOutcome<Self>);
     }
 }
 
@@ -226,6 +227,7 @@ mod tests {
     }
 
     async fn do_work_a(_target: &str) -> i32 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
         42
     }
 
@@ -267,7 +269,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_test() {
+    async fn no_request_cancel_test() {
+        let mut server = TestServerA {};
+        let (mut submitter, mut executor) = Factory::stateless::<TestServerA, CancelChannel>();
+        let handle = submitter.submit(&mut server, MyGoal::default()).unwrap();
+        let result_handle = handle.into_result_receiver();
+
+        tokio::spawn(async move { executor.execute().await });
+        let out = result_handle.await.unwrap();
+        assert!(matches!(out, Outcome::Succeed(_)));
+    }
+
+    #[tokio::test]
+    async fn request_cancel_test() {
         let mut server = TestServerA {};
         let (mut submitter, mut executor) = Factory::stateless::<TestServerA, CancelChannel>();
         let handle = submitter.submit(&mut server, MyGoal::default()).unwrap();
@@ -309,17 +323,10 @@ mod tests {
             });
 
             let task = async move {
-                dbg!("started executing task");
                 tokio::time::sleep(Duration::from_millis(100)).await;
-
                 state_sender.send(MyTaskState { progress: 50 }).unwrap();
-                dbg!("task at 50% progress");
-
                 tokio::time::sleep(Duration::from_millis(100)).await;
-
                 state_sender.send(MyTaskState { progress: 100 }).unwrap();
-                dbg!("task at 100% progress");
-
                 Outcome::Succeed(MySucceedOutputC)
             };
 
@@ -358,5 +365,27 @@ mod tests {
                 assert!(matches!(result, Outcome::Cancelled(MyTaskState { progress: 50})));
             }
         };
+    }
+
+    #[tokio::test]
+    async fn stateful_server_visit_called() {
+        let mut mock_server = MockVisitOutcomeMock::new();
+        mock_server.expect_create().once().return_once(|()| {
+            ServerTask::<MockVisitOutcomeMock>::new(Box::pin(async { Outcome::Succeed(()) }))
+        });
+        mock_server.expect_visit().times(1).returning(|outcome| {
+            assert!(matches!(outcome, Outcome::Succeed(_)));
+        });
+
+        let (mut submitter, mut executor) =
+            Factory::stateful::<MockVisitOutcomeMock, CancelChannel>();
+
+        tokio::spawn(async move {
+            executor.execute().await;
+        });
+
+        let handle = submitter.submit(&mut mock_server, ()).unwrap();
+        let visitable_result = handle.into_visitable_result(&mut mock_server);
+        let _ = visitable_result.await_result().await;
     }
 }
