@@ -160,7 +160,7 @@ mod tests {
     use super::*;
     use crate::{
         factory::Factory,
-        submitting::{NoCancelChannel, SubmitGoal},
+        submitting::{CancelChannel, NoCancelChannel, SubmitGoal},
     };
 
     #[derive(Default)]
@@ -175,17 +175,9 @@ mod tests {
         error: String,
     }
 
-    pub struct MySucceedOutputB {
-        bytes: usize,
-    }
-    pub struct MyFailedOutputB {
-        code: u32,
-    }
+    pub struct TestServerA;
 
-    pub struct MyServerA;
-    pub struct MyServerB;
-
-    impl ServerConcept for MyServerA {
+    impl ServerConcept for TestServerA {
         type Goal = MyGoal;
         type SucceedOutput = MySucceedOutputA;
         type FailedOutput = MyFailedOutputA;
@@ -202,7 +194,20 @@ mod tests {
         }
     }
 
-    impl ServerConcept for MyServerB {
+    async fn do_work_a(_target: &str) -> i32 {
+        42
+    }
+
+    pub struct MySucceedOutputB {
+        bytes: usize,
+    }
+    pub struct MyFailedOutputB {
+        code: u32,
+    }
+
+    pub struct TestServerB;
+
+    impl ServerConcept for TestServerB {
         type Goal = MyGoal;
         type SucceedOutput = MySucceedOutputB;
         type FailedOutput = MyFailedOutputB;
@@ -219,51 +224,48 @@ mod tests {
         }
     }
 
-    async fn do_work_a(_target: &str) -> i32 {
-        42
-    }
     async fn do_work_b(target: &str) -> usize {
         target.len()
     }
 
     #[tokio::test]
     async fn test_two_servers_same_goal() {
-        let mut server_a = MyServerA {};
-        let (mut submitter_a, executor_a) = Factory::instantiate::<MyServerA, NoCancelChannel>();
+        let mut server_a = TestServerA {};
+        let (mut submitter_a, mut executor_a) =
+            Factory::instantiate::<TestServerA, NoCancelChannel>();
 
-        tokio::spawn(async move {
-            let mut executor_a = executor_a;
-            executor_a.execute().await
-        });
+        tokio::spawn(async move { executor_a.execute().await });
 
         let handle_a = submitter_a
             .submit(&mut server_a, MyGoal::default())
             .unwrap();
         let out_a = handle_a.into_result_receiver().await.unwrap();
+        assert!(matches!(out_a, Outcome::Succeed(_)));
 
-        match out_a {
-            Outcome::Succeed(_s) => {}
-            Outcome::Cancelled(_) => panic!("unexpected cancel"),
-            Outcome::Failed(_) => panic!("unexpected failure"),
-        }
+        let mut server_b = TestServerB {};
+        let (mut submitter_b, mut executor_b) =
+            Factory::instantiate::<TestServerB, NoCancelChannel>();
 
-        let mut server_b = MyServerB {};
-        let (mut submitter_b, executor_b) = Factory::instantiate::<MyServerB, NoCancelChannel>();
-
-        tokio::spawn(async move {
-            let mut executor_b = executor_b;
-            executor_b.execute().await
-        });
+        tokio::spawn(async move { executor_b.execute().await });
 
         let handle_b = submitter_b
             .submit(&mut server_b, MyGoal::default())
             .unwrap();
         let out_b = handle_b.into_result_receiver().await.unwrap();
+        assert!(matches!(out_b, Outcome::Succeed(_)));
+    }
 
-        match out_b {
-            Outcome::Succeed(_s) => {}
-            Outcome::Cancelled(_) => panic!("unexpected cancel"),
-            Outcome::Failed(_) => panic!("unexpected failure"),
-        }
+    #[tokio::test]
+    async fn test_cancel() {
+        let mut server = TestServerA {};
+        let (mut submitter, mut executor) = Factory::instantiate::<TestServerA, CancelChannel>();
+
+        let handle = submitter.submit(&mut server, MyGoal::default()).unwrap();
+        let (result_handle, _) = handle.cancel();
+
+        tokio::spawn(async move { executor.execute().await });
+
+        let out = result_handle.await.unwrap();
+        assert!(matches!(out, Outcome::Cancelled(_)));
     }
 }

@@ -178,7 +178,7 @@ impl<R, C, Rx> TaskHandle<R, C, WithFeedback<Rx>> {
 }
 
 pub trait CancelChannelFactory {
-    type Sender;
+    type Sender: CancelConfigMarker;
     fn channel() -> (Self::Sender, impl CancelReceiver);
 }
 
@@ -203,18 +203,19 @@ impl CancelReceiver for NoCancelReceiver {
 pub struct NoCancelChannel;
 
 impl CancelChannelFactory for NoCancelChannel {
-    type Sender = ();
+    type Sender = NoCancel;
     fn channel() -> (Self::Sender, impl CancelReceiver) {
-        ((), NoCancelReceiver)
+        (NoCancel, NoCancelReceiver)
     }
 }
 
 pub struct CancelChannel;
 
 impl CancelChannelFactory for CancelChannel {
-    type Sender = oneshot::Sender<()>;
+    type Sender = WithCancel<oneshot::Sender<()>>;
     fn channel() -> (Self::Sender, impl CancelReceiver) {
-        tokio::sync::oneshot::channel()
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        (WithCancel(sender), receiver)
     }
 }
 
