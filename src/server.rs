@@ -1,6 +1,10 @@
+#[cfg(test)]
+use mockall::{automock, mock};
+
 use std::pin::Pin;
 
 ///TEX: task execution context
+#[derive(Debug)]
 pub enum Outcome<S, TEX, F> {
     Succeed(S),
     Cancelled(TEX),
@@ -18,12 +22,16 @@ pub type ServerSnapshot<S> =
 
 pub type PinnedOutcomeFut<S> = Pin<Box<dyn Future<Output = ServerOutcome<S>> + Send + 'static>>;
 
-pub type ServerTask<S> = TaskWithContext<
-    PinnedOutcomeFut<S>,
-    <S as ServerConcept>::FeedbackConfig,
-    <S as ServerConcept>::TaskStateConfig,
->;
-
+#[cfg_attr(
+    test,
+    automock(
+        type Goal =  ();
+        type SucceedOutput = ();
+        type FailedOutput = ();
+        type FeedbackConfig = NoFeedback;
+        type TaskStateConfig = NoTaskStateSnapshot;
+    )
+)]
 pub trait ServerConcept {
     type Goal: Send + 'static;
     type SucceedOutput: Send + 'static;
@@ -83,13 +91,18 @@ where
     }
 }
 
+pub type ServerTask<S> = TaskWithContext<
+    PinnedOutcomeFut<S>,
+    <S as ServerConcept>::FeedbackConfig,
+    <S as ServerConcept>::TaskStateConfig,
+>;
+
 pub struct TaskWithContext<T, FR, TR> {
     pub(crate) task: T,
     pub(crate) feedback_receiver: FR,
     pub(crate) task_state_snapshot_receiver: TR,
 }
 
-// 1) task only
 impl<T> TaskWithContext<T, NoFeedback, NoTaskStateSnapshot> {
     pub fn new(task: T) -> Self {
         Self {
@@ -100,7 +113,6 @@ impl<T> TaskWithContext<T, NoFeedback, NoTaskStateSnapshot> {
     }
 }
 
-// 2) task + feedback
 impl<T, R> TaskWithContext<T, WithFeedback<R>, NoTaskStateSnapshot> {
     pub fn new(task: T, feedback_receiver: WithFeedback<R>) -> Self {
         Self {
@@ -111,7 +123,6 @@ impl<T, R> TaskWithContext<T, WithFeedback<R>, NoTaskStateSnapshot> {
     }
 }
 
-// 3) task + task_state
 impl<T, R> TaskWithContext<T, NoFeedback, WithTaskStateSnapshot<R>> {
     pub fn new(task: T, task_state_snapshot_receiver: WithTaskStateSnapshot<R>) -> Self {
         Self {
@@ -122,7 +133,6 @@ impl<T, R> TaskWithContext<T, NoFeedback, WithTaskStateSnapshot<R>> {
     }
 }
 
-// 4) task + feedback + task_state
 impl<T, FR, TR> TaskWithContext<T, WithFeedback<FR>, WithTaskStateSnapshot<TR>> {
     pub fn new(
         task: T,
@@ -136,8 +146,6 @@ impl<T, FR, TR> TaskWithContext<T, WithFeedback<FR>, WithTaskStateSnapshot<TR>> 
         }
     }
 }
-
-pub struct StatefulServer;
 
 pub trait VisitOutcome: ServerConcept {
     // user implements methods that is interested in
@@ -156,7 +164,30 @@ pub trait VisitOutcome: ServerConcept {
 }
 
 #[cfg(test)]
+mock! {
+    pub VisitOutcomeMock {}
+
+    impl ServerConcept for VisitOutcomeMock {
+        type Goal = ();
+        type SucceedOutput = ();
+        type FailedOutput = ();
+        type FeedbackConfig = NoFeedback;
+        type TaskStateConfig = NoTaskStateSnapshot;
+
+        fn create(&mut self, goal: <MockVisitOutcomeMock as ServerConcept>::Goal) -> ServerTask<Self>;
+    }
+
+    impl VisitOutcome for VisitOutcomeMock {
+        fn on_succeed(&mut self, o: &<MockVisitOutcomeMock as ServerConcept>::SucceedOutput);
+        fn on_cancelled(&mut self, o: &ServerSnapshot<Self>);
+        fn on_failed(&mut self, o: &<MockVisitOutcomeMock as ServerConcept>::FailedOutput);
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::{
         factory::Factory,
@@ -228,44 +259,104 @@ mod tests {
         target.len()
     }
 
-    #[tokio::test]
-    async fn test_two_servers_same_goal() {
-        let mut server_a = TestServerA {};
-        let (mut submitter_a, mut executor_a) =
-            Factory::instantiate::<TestServerA, NoCancelChannel>();
-
-        tokio::spawn(async move { executor_a.execute().await });
-
-        let handle_a = submitter_a
-            .submit(&mut server_a, MyGoal::default())
-            .unwrap();
-        let out_a = handle_a.into_result_receiver().await.unwrap();
-        assert!(matches!(out_a, Outcome::Succeed(_)));
-
-        let mut server_b = TestServerB {};
-        let (mut submitter_b, mut executor_b) =
-            Factory::instantiate::<TestServerB, NoCancelChannel>();
-
-        tokio::spawn(async move { executor_b.execute().await });
-
-        let handle_b = submitter_b
-            .submit(&mut server_b, MyGoal::default())
-            .unwrap();
-        let out_b = handle_b.into_result_receiver().await.unwrap();
-        assert!(matches!(out_b, Outcome::Succeed(_)));
+    // compile-time test
+    #[test]
+    fn two_servers_impl_same_goal_test() {
+        let (_s1, _e1) = Factory::stateless::<TestServerA, NoCancelChannel>();
+        let (_s2, _e2) = Factory::stateless::<TestServerB, NoCancelChannel>();
     }
 
     #[tokio::test]
-    async fn test_cancel() {
+    async fn cancel_test() {
         let mut server = TestServerA {};
-        let (mut submitter, mut executor) = Factory::instantiate::<TestServerA, CancelChannel>();
-
+        let (mut submitter, mut executor) = Factory::stateless::<TestServerA, CancelChannel>();
         let handle = submitter.submit(&mut server, MyGoal::default()).unwrap();
         let (result_handle, _) = handle.cancel();
 
         tokio::spawn(async move { executor.execute().await });
-
         let out = result_handle.await.unwrap();
         assert!(matches!(out, Outcome::Cancelled(_)));
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub struct MyTaskState {
+        pub progress: u32,
+    }
+
+    #[derive(Debug)]
+    pub struct MySucceedOutputC;
+    #[derive(Debug)]
+    pub struct MyFailedOutputC;
+
+    #[derive(Debug, Default)]
+    pub struct MyProgressGoal {
+        initial_progress: u32,
+    }
+
+    pub struct TestServerC;
+
+    impl ServerConcept for TestServerC {
+        type Goal = MyProgressGoal;
+        type SucceedOutput = MySucceedOutputC;
+        type FailedOutput = MyFailedOutputC;
+
+        type FeedbackConfig = NoFeedback;
+        type TaskStateConfig = WithTaskStateSnapshot<tokio::sync::watch::Receiver<MyTaskState>>;
+
+        fn create(&mut self, goal: Self::Goal) -> ServerTask<Self> {
+            let (state_sender, state_receiver) = tokio::sync::watch::channel(MyTaskState {
+                progress: goal.initial_progress,
+            });
+
+            let task = async move {
+                dbg!("started executing task");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+
+                state_sender.send(MyTaskState { progress: 50 }).unwrap();
+                dbg!("task at 50% progress");
+
+                tokio::time::sleep(Duration::from_millis(100)).await;
+
+                state_sender.send(MyTaskState { progress: 100 }).unwrap();
+                dbg!("task at 100% progress");
+
+                Outcome::Succeed(MySucceedOutputC)
+            };
+
+            ServerTask::<Self>::new(Box::pin(task), WithTaskStateSnapshot(state_receiver))
+        }
+    }
+
+    #[tokio::test]
+    async fn cancel_with_exe_ctx_test() {
+        let mut server = TestServerC {};
+        let (mut submitter, mut executor) = Factory::stateless::<TestServerC, CancelChannel>();
+
+        let handle = submitter
+            .submit(&mut server, MyProgressGoal::default())
+            .unwrap();
+        let (result_handle, _) = handle.cancel();
+        tokio::select! {
+            _ = executor.execute() => {},
+            result = result_handle => {
+                let result = result.unwrap();
+                assert!(matches!(result, Outcome::Cancelled(MyTaskState { progress: 0})));
+            }
+        };
+
+        let handle = submitter
+            .submit(&mut server, MyProgressGoal::default())
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_millis(100), executor.execute()).await;
+        assert!(result.is_err());
+        let (result_handle, _) = handle.cancel();
+
+        tokio::select! {
+            _ = executor.execute() => {},
+            result = result_handle => {
+                let result = result.unwrap();
+                assert!(matches!(result, Outcome::Cancelled(MyTaskState { progress: 50})));
+            }
+        };
     }
 }

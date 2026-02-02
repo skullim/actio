@@ -8,31 +8,36 @@ use std::task::Poll;
 use crate::PinnedTask;
 
 pub struct Executor {
+    tasks: FuturesUnordered<PinnedTask>,
     task_receiver: Receiver<PinnedTask>,
 }
 
 impl Executor {
     pub(crate) fn new(task_receiver: Receiver<PinnedTask>) -> Self {
-        Self { task_receiver }
+        Self {
+            task_receiver,
+            tasks: FuturesUnordered::new(),
+        }
     }
 
     pub async fn execute(&mut self) {
-        let mut tasks = FuturesUnordered::new();
-
         loop {
             let execute_next_task_fut = poll_fn(|cx| {
-                if tasks.is_empty() {
+                if self.tasks.is_empty() {
                     Poll::Pending
                 } else {
-                    tasks.poll_next_unpin(cx)
+                    self.tasks.poll_next_unpin(cx)
                 }
             });
 
             tokio::select! {
                 Some(task) = self.task_receiver.recv() => {
-                    tasks.push(task);
+                    dbg!("pushing new task");
+                    self.tasks.push(task);
                 },
                 _ = execute_next_task_fut => {
+                    dbg!("finished executing task");
+
                 }
 
             }
