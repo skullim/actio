@@ -1,41 +1,18 @@
-// Capabilities that change the server async task
-// 1. Sending result (req)
-// 2. cancelling future (opt)
-// 3. sending task execution ctx on cancel (opt)
-
-// Data needed when creating server task
-// 1. Task (req)
-// 2. Feedback (receiver) (opt)
-// 3. Task execution ctx (receiver) (opt)
-// Both affect how Task Handle is built
-
-// Different Task Handles that contain 0 or 1 of followings:
-// 1. result receiver (req)
-// 2. cancel sender (opt)
-// 3. feedback receiver (opt)
-// 4. act as wrapper to await result, but let server visit result (supports stateful server) (opt)
-
 use std::marker::PhantomData;
 
-use crate::server::{Outcome, ServerOutcome, TaskStateSnapshotReceiver};
+use crate::server::{Outcome, ServerConcept, ServerOutcome, TaskStateSnapshotReceiver};
 use crate::task_handle::{
     CancelConfigMarker, NoCancel, StatefulTaskHandle, TaskHandle, WithCancel,
 };
-use crate::{PinnedTask, server::ServerConcept};
+use crate::{Error, PinnedTask, Result};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
-
-#[derive(Debug)]
-pub enum Error {
-    Full,
-    RejectedByExecutor,
-}
 
 pub trait SubmitGoal<G> {
     type TaskHandle;
     type Server: ServerConcept;
 
-    fn submit(&mut self, server: &mut Self::Server, goal: G) -> Result<Self::TaskHandle, Error>;
+    fn submit(&mut self, server: &mut Self::Server, goal: G) -> Result<Self::TaskHandle>;
 }
 
 pub(crate) struct GoalSubmitter<S, CF> {
@@ -60,8 +37,9 @@ where
     type Server = S;
     type TaskHandle = TaskHandle<S, CF>;
 
-    fn submit(&mut self, server: &mut S, goal: S::Goal) -> Result<Self::TaskHandle, Error> {
-        let (result_sender, result_receiver) = ResultChannelFactory::channel::<ServerOutcome<S>>();
+    fn submit(&mut self, server: &mut S, goal: S::Goal) -> Result<Self::TaskHandle> {
+        let (outcome_sender, outcome_receiver) =
+            OutcomeChannelFactory::channel::<ServerOutcome<S>>();
         let (cancel_sender, cancel_receiver) = CF::channel();
 
         let task_with_ctx = server.create(goal);
@@ -77,15 +55,15 @@ where
                 }
                 r = task => r,
             };
-            let _ = result_sender.send(outcome);
+            let _ = outcome_sender.send(outcome);
         };
 
         self.task_sender
             .try_send(Box::pin(task))
-            .map_err(|_| Error::RejectedByExecutor)?;
+            .map_err(|_| Error::FullExecutor)?;
 
         Ok(Self::TaskHandle::new(
-            result_receiver,
+            outcome_receiver,
             cancel_sender,
             feedback_receiver,
         ))
@@ -110,15 +88,15 @@ where
     type Server = S;
     type TaskHandle = StatefulTaskHandle<S, CF>;
 
-    fn submit(&mut self, server: &mut S, goal: S::Goal) -> Result<Self::TaskHandle, Error> {
+    fn submit(&mut self, server: &mut S, goal: S::Goal) -> Result<Self::TaskHandle> {
         let handle = self.submitter.submit(server, goal)?;
         Ok(StatefulTaskHandle::new(handle))
     }
 }
 
-struct ResultChannelFactory;
+struct OutcomeChannelFactory;
 
-impl ResultChannelFactory {
+impl OutcomeChannelFactory {
     fn channel<O>() -> (oneshot::Sender<O>, oneshot::Receiver<O>) {
         tokio::sync::oneshot::channel()
     }

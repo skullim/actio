@@ -1,8 +1,9 @@
 use crate::{
+    Error, Result,
     server::{ServerConcept, ServerOutcome, VisitOutcome, WithFeedback},
     submitting::CancelChannelFactory,
 };
-use anyhow::anyhow;
+use std::result::Result as StdResult;
 use tokio::sync::oneshot;
 
 pub type TaskHandle<S, CF> = GenericTaskHandle<
@@ -12,30 +13,22 @@ pub type TaskHandle<S, CF> = GenericTaskHandle<
 >;
 
 pub struct GenericTaskHandle<R, C, F> {
-    result_receiver: R,
+    outcome_receiver: R,
     cancel_sender: C,
     feedback_receiver: F,
 }
 
 impl<R, C, F> GenericTaskHandle<R, C, F> {
-    pub fn new(result_receiver: R, cancel_sender: C, feedback_receiver: F) -> Self {
+    pub fn new(outcome_receiver: R, cancel_sender: C, feedback_receiver: F) -> Self {
         Self {
-            result_receiver,
+            outcome_receiver,
             cancel_sender,
             feedback_receiver,
         }
     }
 
-    // pub fn result_receiver(&self) -> &R {
-    //     &self.result_receiver
-    // }
-
-    // pub fn result_receiver_mut(&mut self) -> &mut R {
-    //     &mut self.result_receiver
-    // }
-
-    pub fn into_result_receiver(self) -> R {
-        self.result_receiver
+    pub fn into_outcome_receiver(self) -> R {
+        self.outcome_receiver
     }
 }
 pub struct NoCancel;
@@ -44,7 +37,7 @@ pub struct NoCancel;
 pub struct WithCancel<S>(S);
 
 impl<S> WithCancel<S> {
-    pub fn new(sender: S) -> Self {
+    pub(crate) fn new(sender: S) -> Self {
         Self(sender)
     }
 }
@@ -54,16 +47,14 @@ impl CancelConfigMarker for NoCancel {}
 
 pub trait CancelSenderMarker {}
 pub trait SendCancel {
-    fn send(self) -> anyhow::Result<()>;
+    fn send(self) -> Result<()>;
 }
 
 impl<T> CancelSenderMarker for tokio::sync::oneshot::Sender<T> {}
 
 impl SendCancel for tokio::sync::oneshot::Sender<()> {
-    fn send(self) -> anyhow::Result<()> {
-        //@todo check if error should be handled. Failing means other side dropped, so in theory only on Full there should be meaningful error
-        self.send(())
-            .map_err(|_| anyhow!("failed to send cancel request"))
+    fn send(self) -> Result<()> {
+        self.send(()).map_err(|_| Error::CancelSendFailure)
     }
 }
 
@@ -76,21 +67,17 @@ where
     pub fn cancel(self) -> (R, F) {
         // can fail only if channel full, but since we sent and consume it should never happen
         let _ = self.cancel_sender.0.send();
-        (self.result_receiver, self.feedback_receiver)
+        (self.outcome_receiver, self.feedback_receiver)
     }
 }
 
 impl<R, C, Rx> GenericTaskHandle<R, C, WithFeedback<Rx>> {
-    pub fn feedback_receiver(&self) -> &WithFeedback<Rx> {
-        &self.feedback_receiver
-    }
-
     pub fn feedback_receiver_mut(&mut self) -> &mut WithFeedback<Rx> {
         &mut self.feedback_receiver
     }
 
     pub fn into_parts(self) -> (R, WithFeedback<Rx>) {
-        (self.result_receiver, self.feedback_receiver)
+        (self.outcome_receiver, self.feedback_receiver)
     }
 }
 
@@ -111,31 +98,31 @@ where
         Self { handle }
     }
 
-    pub fn into_visitable_result<'a>(
+    pub fn into_visitable_outcome<'a>(
         self,
         server: &'a mut S,
-    ) -> VisitableResult<'a, S, ServerOutcome<S>>
+    ) -> VisitableOutcome<'a, S, ServerOutcome<S>>
     where
         S: VisitOutcome,
     {
-        let receiver = self.handle.into_result_receiver();
-        VisitableResult { server, receiver }
+        let receiver = self.handle.into_outcome_receiver();
+        VisitableOutcome { server, receiver }
     }
 }
 
-pub struct VisitableResult<'a, S, O> {
+pub struct VisitableOutcome<'a, S, O> {
     server: &'a mut S,
     receiver: oneshot::Receiver<O>,
 }
 
-impl<'a, S> VisitableResult<'a, S, ServerOutcome<S>>
+impl<'a, S> VisitableOutcome<'a, S, ServerOutcome<S>>
 where
     S: VisitOutcome,
 {
-    pub async fn await_result(self) -> ServerOutcome<S> {
+    pub async fn outcome(self) -> StdResult<ServerOutcome<S>, S::Error> {
         let outcome = self.receiver.await.unwrap();
-        self.server.visit(&outcome);
-        outcome
+        self.server.visit(&outcome)?;
+        Ok(outcome)
     }
 }
 
@@ -148,15 +135,15 @@ where
     pub async fn cancel<'a>(
         self,
         server: &'a mut S,
-    ) -> (VisitableResult<'a, S, ServerOutcome<S>>, S::FeedbackConfig)
+    ) -> (VisitableOutcome<'a, S, ServerOutcome<S>>, S::FeedbackConfig)
     where
         S: VisitOutcome,
     {
-        let (result_receiver, feedback_receiver) = self.handle.cancel();
+        let (outcome_receiver, feedback_receiver) = self.handle.cancel();
         (
-            VisitableResult {
+            VisitableOutcome {
                 server,
-                receiver: result_receiver,
+                receiver: outcome_receiver,
             },
             feedback_receiver,
         )

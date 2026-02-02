@@ -4,6 +4,7 @@ use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::future::poll_fn;
 use std::task::Poll;
+use tracing::trace;
 
 use crate::PinnedTask;
 
@@ -32,11 +33,11 @@ impl Executor {
 
             tokio::select! {
                 Some(task) = self.task_receiver.recv() => {
-                    dbg!("pushing new task");
+                    trace!("pushing new task");
                     self.tasks.push(task);
                 },
                 _ = execute_next_task_fut => {
-                    dbg!("finished executing task");
+                    trace!("finished executing task");
 
                 }
 

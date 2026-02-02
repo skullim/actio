@@ -1,6 +1,21 @@
+// Capabilities that change the server async task
+// 1. Sending result (req)
+// 2. cancelling future (opt)
+// 3. sending task execution ctx on cancel (opt)
+
+// Data needed when creating server task
+// 1. Task (req)
+// 2. Feedback (receiver) (opt)
+// 3. Task execution ctx (receiver) (opt)
+// Both affect how Task Handle is built
+
+// Different Task Handles that contain 0 or 1 of followings:
+// 1. result receiver (req)
+// 2. cancel sender (opt)
+// 3. feedback receiver (opt)
+// 4. act as wrapper to await result, but let server visit result (supports stateful server) (opt)
 #[cfg(test)]
 use mockall::{automock, mock};
-
 use std::pin::Pin;
 
 ///TEX: task execution context
@@ -148,13 +163,19 @@ impl<T, FR, TR> TaskWithContext<T, WithFeedback<FR>, WithTaskStateSnapshot<TR>> 
 }
 
 pub trait VisitOutcome: ServerConcept {
+    type Error;
     // user implements methods that is interested in
-    fn on_succeed(&mut self, _o: &Self::SucceedOutput) {}
-    fn on_cancelled(&mut self, _o: &ServerSnapshot<Self>) {}
-    fn on_failed(&mut self, _o: &Self::FailedOutput) {}
+    fn on_succeed(&mut self, _o: &Self::SucceedOutput) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn on_cancelled(&mut self, _o: &ServerSnapshot<Self>) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn on_failed(&mut self, _o: &Self::FailedOutput) -> Result<(), Self::Error> {
+        Ok(())
+    }
 
-    //@todo add Result
-    fn visit(&mut self, outcome: &ServerOutcome<Self>) {
+    fn visit(&mut self, outcome: &ServerOutcome<Self>) -> Result<(), Self::Error> {
         match outcome {
             Outcome::Succeed(s) => self.on_succeed(s),
             Outcome::Cancelled(c) => self.on_cancelled(c),
@@ -165,35 +186,41 @@ pub trait VisitOutcome: ServerConcept {
 
 #[cfg(test)]
 mock! {
-    pub VisitOutcomeMock {}
+    pub VisitOutcome {}
 
-    impl ServerConcept for VisitOutcomeMock {
+    impl ServerConcept for VisitOutcome {
         type Goal = ();
         type SucceedOutput = ();
         type FailedOutput = ();
         type FeedbackConfig = NoFeedback;
         type TaskStateConfig = NoTaskStateSnapshot;
 
-        fn create(&mut self, goal: <MockVisitOutcomeMock as ServerConcept>::Goal) -> ServerTask<Self>;
+        fn create(&mut self, goal: <MockVisitOutcome as ServerConcept>::Goal) -> ServerTask<Self>;
     }
 
-    impl VisitOutcome for VisitOutcomeMock {
-        fn on_succeed(&mut self, o: &<MockVisitOutcomeMock as ServerConcept>::SucceedOutput);
-        fn on_cancelled(&mut self, o: &ServerSnapshot<Self>);
-        fn on_failed(&mut self, o: &<MockVisitOutcomeMock as ServerConcept>::FailedOutput);
-        fn visit(&mut self, outcome: &ServerOutcome<Self>);
+    impl VisitOutcome for VisitOutcome {
+        type Error = anyhow::Error;
+
+        fn on_succeed(&mut self, o: &<MockVisitOutcome as ServerConcept>::SucceedOutput) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
+        fn on_cancelled(&mut self, o: &ServerSnapshot<Self>) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
+        fn on_failed(&mut self, o: &<MockVisitOutcome as ServerConcept>::FailedOutput) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
+
+        fn visit(&mut self, outcome: &ServerOutcome<Self>)-> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
     use crate::{
+        execution::Executor,
         factory::Factory,
         submitting::{CancelChannel, NoCancelChannel, SubmitGoal},
     };
+    use std::time::Duration;
+
+    const STANDARD_TASK_QUEUE_SIZE: usize = 16;
+    const STRESS_TEST_TASK_QUEUE_SIZE: usize = 10_000;
 
     #[derive(Default)]
     pub struct MyGoal {
@@ -201,7 +228,7 @@ mod tests {
     }
 
     pub struct MySucceedOutputA {
-        result: i32,
+        result: usize,
     }
     pub struct MyFailedOutputA {
         error: String,
@@ -226,9 +253,9 @@ mod tests {
         }
     }
 
-    async fn do_work_a(_target: &str) -> i32 {
+    async fn do_work_a(target: &str) -> usize {
         tokio::time::sleep(Duration::from_millis(10)).await;
-        42
+        target.len()
     }
 
     pub struct MySucceedOutputB {
@@ -259,37 +286,6 @@ mod tests {
 
     async fn do_work_b(target: &str) -> usize {
         target.len()
-    }
-
-    // compile-time test
-    #[test]
-    fn two_servers_impl_same_goal_test() {
-        let (_s1, _e1) = Factory::stateless::<TestServerA, NoCancelChannel>();
-        let (_s2, _e2) = Factory::stateless::<TestServerB, NoCancelChannel>();
-    }
-
-    #[tokio::test]
-    async fn no_request_cancel_test() {
-        let mut server = TestServerA {};
-        let (mut submitter, mut executor) = Factory::stateless::<TestServerA, CancelChannel>();
-        let handle = submitter.submit(&mut server, MyGoal::default()).unwrap();
-        let result_handle = handle.into_result_receiver();
-
-        tokio::spawn(async move { executor.execute().await });
-        let out = result_handle.await.unwrap();
-        assert!(matches!(out, Outcome::Succeed(_)));
-    }
-
-    #[tokio::test]
-    async fn request_cancel_test() {
-        let mut server = TestServerA {};
-        let (mut submitter, mut executor) = Factory::stateless::<TestServerA, CancelChannel>();
-        let handle = submitter.submit(&mut server, MyGoal::default()).unwrap();
-        let (result_handle, _) = handle.cancel();
-
-        tokio::spawn(async move { executor.execute().await });
-        let out = result_handle.await.unwrap();
-        assert!(matches!(out, Outcome::Cancelled(_)));
     }
 
     #[derive(Clone, Debug, Default)]
@@ -334,58 +330,131 @@ mod tests {
         }
     }
 
+    async fn execute_till_outcome<S>(
+        recv: tokio::sync::oneshot::Receiver<ServerOutcome<S>>,
+        executor: &mut Executor,
+    ) -> ServerOutcome<S>
+    where
+        S: ServerConcept,
+    {
+        tokio::select! {
+            _ = executor.execute() => {
+                panic!("executor should never finish before outcome handle")
+            },
+            outcome = recv => {
+                outcome.unwrap()
+            }
+        }
+    }
+
+    async fn poll_executor_for(duration: tokio::time::Duration, executor: &mut Executor) {
+        let _ = tokio::time::timeout(duration, executor.execute()).await;
+    }
+
+    // compile-time test
+    #[test]
+    fn two_servers_impl_same_goal_test() {
+        let (_s1, _e1) =
+            Factory::stateless::<TestServerA, NoCancelChannel>(STANDARD_TASK_QUEUE_SIZE);
+        let (_s2, _e2) =
+            Factory::stateless::<TestServerB, NoCancelChannel>(STANDARD_TASK_QUEUE_SIZE);
+    }
+
+    #[tokio::test]
+    async fn no_request_cancel_test() {
+        let mut server = TestServerA {};
+        let (mut submitter, mut executor) =
+            Factory::stateless::<TestServerA, CancelChannel>(STANDARD_TASK_QUEUE_SIZE);
+        let handle = submitter.submit(&mut server, MyGoal::default()).unwrap();
+        let outcome_recv = handle.into_outcome_receiver();
+
+        let out = execute_till_outcome::<TestServerA>(outcome_recv, &mut executor).await;
+        assert!(matches!(out, Outcome::Succeed(_)));
+    }
+
+    #[tokio::test]
+    async fn request_cancel_test() {
+        let mut server = TestServerA {};
+        let (mut submitter, mut executor) =
+            Factory::stateless::<TestServerA, CancelChannel>(STANDARD_TASK_QUEUE_SIZE);
+        let handle = submitter.submit(&mut server, MyGoal::default()).unwrap();
+        let (outcome_recv, _) = handle.cancel();
+
+        let out = execute_till_outcome::<TestServerA>(outcome_recv, &mut executor).await;
+        assert!(matches!(out, Outcome::Cancelled(_)));
+    }
+
     #[tokio::test]
     async fn cancel_with_exe_ctx_test() {
         let mut server = TestServerC {};
-        let (mut submitter, mut executor) = Factory::stateless::<TestServerC, CancelChannel>();
+        let (mut submitter, mut executor) =
+            Factory::stateless::<TestServerC, CancelChannel>(STANDARD_TASK_QUEUE_SIZE);
 
         let handle = submitter
             .submit(&mut server, MyProgressGoal::default())
             .unwrap();
-        let (result_handle, _) = handle.cancel();
-        tokio::select! {
-            _ = executor.execute() => {},
-            result = result_handle => {
-                let result = result.unwrap();
-                assert!(matches!(result, Outcome::Cancelled(MyTaskState { progress: 0})));
-            }
-        };
+        let (outcome_recv, _) = handle.cancel();
+        let out = execute_till_outcome::<TestServerC>(outcome_recv, &mut executor).await;
+        assert!(matches!(
+            out,
+            Outcome::Cancelled(MyTaskState { progress: 0 })
+        ));
 
         let handle = submitter
             .submit(&mut server, MyProgressGoal::default())
             .unwrap();
-        let result = tokio::time::timeout(Duration::from_millis(100), executor.execute()).await;
-        assert!(result.is_err());
-        let (result_handle, _) = handle.cancel();
+        poll_executor_for(Duration::from_millis(100), &mut executor).await;
 
-        tokio::select! {
-            _ = executor.execute() => {},
-            result = result_handle => {
-                let result = result.unwrap();
-                assert!(matches!(result, Outcome::Cancelled(MyTaskState { progress: 50})));
-            }
-        };
+        let (outcome_recv, _) = handle.cancel();
+
+        let out = execute_till_outcome::<TestServerC>(outcome_recv, &mut executor).await;
+        assert!(matches!(
+            out,
+            Outcome::Cancelled(MyTaskState { progress: 50 })
+        ));
     }
 
     #[tokio::test]
     async fn stateful_server_visit_called() {
-        let mut mock_server = MockVisitOutcomeMock::new();
+        let mut mock_server = MockVisitOutcome::new();
         mock_server.expect_create().once().return_once(|()| {
-            ServerTask::<MockVisitOutcomeMock>::new(Box::pin(async { Outcome::Succeed(()) }))
+            ServerTask::<MockVisitOutcome>::new(Box::pin(async { Outcome::Succeed(()) }))
         });
-        mock_server.expect_visit().times(1).returning(|outcome| {
-            assert!(matches!(outcome, Outcome::Succeed(_)));
-        });
+        mock_server.expect_visit().times(1).returning(|_| Ok(()));
 
         let (mut submitter, mut executor) =
-            Factory::stateful::<MockVisitOutcomeMock, CancelChannel>();
+            Factory::stateful::<MockVisitOutcome, CancelChannel>(STANDARD_TASK_QUEUE_SIZE);
 
+        let handle = submitter.submit(&mut mock_server, ()).unwrap();
+        let visitable_outcome = handle.into_visitable_outcome(&mut mock_server);
         tokio::spawn(async move {
             executor.execute().await;
         });
+        let _ = visitable_outcome.outcome().await;
+    }
 
-        let handle = submitter.submit(&mut mock_server, ()).unwrap();
-        let visitable_result = handle.into_visitable_result(&mut mock_server);
-        let _ = visitable_result.await_result().await;
+    #[tokio::test]
+    async fn stress_test() {
+        let mut server = TestServerC {};
+        let (mut submitter, mut executor) =
+            Factory::stateless::<TestServerC, CancelChannel>(STRESS_TEST_TASK_QUEUE_SIZE);
+        let mut handles: Vec<_> = (0..STRESS_TEST_TASK_QUEUE_SIZE)
+            .map(|_| {
+                submitter
+                    .submit(&mut server, MyProgressGoal::default())
+                    .unwrap()
+            })
+            .collect();
+
+        poll_executor_for(Duration::from_millis(42), &mut executor).await;
+        let handle = handles.remove(4_200);
+        let (outcome_recv, _) = handle.cancel();
+        let result = tokio::time::timeout(
+            Duration::from_millis(1),
+            execute_till_outcome::<TestServerC>(outcome_recv, &mut executor),
+        )
+        .await;
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), Outcome::Cancelled(_)));
     }
 }

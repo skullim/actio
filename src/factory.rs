@@ -10,7 +10,9 @@ use crate::{
 pub struct Factory;
 
 impl Factory {
-    pub fn stateless<S, CF>() -> (
+    pub fn stateless<S, CF>(
+        task_queue_buffer: usize,
+    ) -> (
         impl SubmitGoal<S::Goal, Server = S, TaskHandle = TaskHandle<S, CF>>,
         Executor,
     )
@@ -18,7 +20,7 @@ impl Factory {
         S: ServerConcept,
         CF: CancelChannelFactory,
     {
-        let (task_sender, task_receiver) = channel(16);
+        let (task_sender, task_receiver) = channel(task_queue_buffer);
 
         (
             GoalSubmitter::<S, CF>::new(task_sender),
@@ -26,7 +28,9 @@ impl Factory {
         )
     }
 
-    pub fn stateful<S, CF>() -> (
+    pub fn stateful<S, CF>(
+        task_queue_buffer: usize,
+    ) -> (
         impl SubmitGoal<S::Goal, Server = S, TaskHandle = StatefulTaskHandle<S, CF>>,
         Executor,
     )
@@ -34,7 +38,7 @@ impl Factory {
         S: ServerConcept,
         CF: CancelChannelFactory,
     {
-        let (task_sender, task_receiver) = channel(16);
+        let (task_sender, task_receiver) = channel(task_queue_buffer);
         let submitter = GoalSubmitter::<S, CF>::new(task_sender);
 
         (
