@@ -26,11 +26,8 @@ pub enum Outcome<S, TEX, F> {
     Failed(F),
 }
 
-pub type ServerOutcome<S> = Outcome<
-    <S as ServerConcept>::SucceedOutput,
-    ServerSnapshot<S>,
-    <S as ServerConcept>::FailedOutput,
->;
+pub type ServerOutcome<S> =
+    Outcome<<S as ServerConcept>::Succeed, ServerSnapshot<S>, <S as ServerConcept>::Failed>;
 
 pub type ServerSnapshot<S> =
     <<S as ServerConcept>::TaskState as TaskStateSnapshotReceiver>::Snapshot;
@@ -41,16 +38,16 @@ pub type OutcomeFutPin<S> = Pin<Box<dyn Future<Output = ServerOutcome<S>> + Send
     test,
     automock(
         type Goal =  ();
-        type SucceedOutput = ();
-        type FailedOutput = ();
+        type Succeed = ();
+        type Failed = ();
         type Feedback = NoFeedback;
         type TaskState = NoTaskStateSnapshot;
     )
 )]
 pub trait ServerConcept {
     type Goal: Send + 'static;
-    type SucceedOutput: Send + 'static;
-    type FailedOutput: Send + 'static;
+    type Succeed: Send + 'static;
+    type Failed: Send + 'static;
 
     type Feedback: FeedbackMarker + Send + 'static;
     type TaskState: TaskStateSnapshotReceiver + Send + 'static;
@@ -167,13 +164,13 @@ impl<T, FR, TR> TaskWithContext<T, FR, TR> {
 pub trait VisitOutcome: ServerConcept {
     type Error;
     // user implements methods that is interested in
-    fn on_succeed(&mut self, _o: &Self::SucceedOutput) -> Result<(), Self::Error> {
+    fn on_succeed(&mut self, _o: &Self::Succeed) -> Result<(), Self::Error> {
         Ok(())
     }
     fn on_cancelled(&mut self, _o: &ServerSnapshot<Self>) -> Result<(), Self::Error> {
         Ok(())
     }
-    fn on_failed(&mut self, _o: &Self::FailedOutput) -> Result<(), Self::Error> {
+    fn on_failed(&mut self, _o: &Self::Failed) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -192,8 +189,8 @@ mock! {
 
     impl ServerConcept for VisitOutcome {
         type Goal = ();
-        type SucceedOutput = ();
-        type FailedOutput = ();
+        type Succeed = ();
+        type Failed = ();
         type Feedback = NoFeedback;
         type TaskState = NoTaskStateSnapshot;
 
@@ -203,9 +200,9 @@ mock! {
     impl VisitOutcome for VisitOutcome {
         type Error = anyhow::Error;
 
-        fn on_succeed(&mut self, o: &<MockVisitOutcome as ServerConcept>::SucceedOutput) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
+        fn on_succeed(&mut self, o: &<MockVisitOutcome as ServerConcept>::Succeed) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
         fn on_cancelled(&mut self, o: &ServerSnapshot<Self>) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
-        fn on_failed(&mut self, o: &<MockVisitOutcome as ServerConcept>::FailedOutput) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
+        fn on_failed(&mut self, o: &<MockVisitOutcome as ServerConcept>::Failed) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
 
         fn visit(&mut self, outcome: &ServerOutcome<Self>)-> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
     }

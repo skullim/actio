@@ -46,8 +46,8 @@ pub mod impls {
 
         impl ServerConcept for TestServer {
             type Goal = super::Goal;
-            type SucceedOutput = SucceedOutput;
-            type FailedOutput = FailedOutput;
+            type Succeed = SucceedOutput;
+            type Failed = FailedOutput;
 
             type Feedback = NoFeedback;
             type TaskState = NoTaskStateSnapshot;
@@ -81,8 +81,8 @@ pub mod impls {
 
         impl ServerConcept for TestServer {
             type Goal = super::Goal;
-            type SucceedOutput = MySucceedOutput;
-            type FailedOutput = MyFailedOutput;
+            type Succeed = MySucceedOutput;
+            type Failed = MyFailedOutput;
 
             type Feedback = NoFeedback;
             type TaskState = NoTaskStateSnapshot;
@@ -124,8 +124,8 @@ pub mod impls {
 
         impl ServerConcept for TestServer {
             type Goal = ProgressGoal;
-            type SucceedOutput = SucceedOutput;
-            type FailedOutput = FailedOutput;
+            type Succeed = SucceedOutput;
+            type Failed = FailedOutput;
 
             type Feedback = NoFeedback;
             type TaskState = WithTaskStateSnapshot<tokio::sync::watch::Receiver<TaskState>>;

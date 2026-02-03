@@ -16,8 +16,8 @@ mod tests {
 
         impl ServerConcept for VisitOutcome {
             type Goal = ();
-            type SucceedOutput = ();
-            type FailedOutput = ();
+            type Succeed = ();
+            type Failed = ();
             type Feedback = NoFeedback;
             type TaskState = NoTaskStateSnapshot;
 
@@ -27,9 +27,9 @@ mod tests {
         impl VisitOutcome for VisitOutcome {
             type Error = anyhow::Error;
 
-            fn on_succeed(&mut self, o: &<MockVisitOutcome as ServerConcept>::SucceedOutput) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
+            fn on_succeed(&mut self, o: &<MockVisitOutcome as ServerConcept>::Succeed) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
             fn on_cancelled(&mut self, o: &ServerSnapshot<Self>) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
-            fn on_failed(&mut self, o: &<MockVisitOutcome as ServerConcept>::FailedOutput) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
+            fn on_failed(&mut self, o: &<MockVisitOutcome as ServerConcept>::Failed) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
 
             fn visit(&mut self, outcome: &ServerOutcome<Self>)-> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
         }
