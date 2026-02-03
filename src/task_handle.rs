@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 pub type TaskHandle<S, CF> = GenericTaskHandle<
     tokio::sync::oneshot::Receiver<ServerOutcome<S>>,
     <CF as CancelChannelFactory>::Sender,
-    <S as ServerConcept>::FeedbackConfig,
+    <S as ServerConcept>::Feedback,
 >;
 
 pub struct GenericTaskHandle<R, C, F> {
@@ -135,7 +135,7 @@ where
     pub async fn cancel<'a>(
         self,
         server: &'a mut S,
-    ) -> (VisitableOutcome<'a, S, ServerOutcome<S>>, S::FeedbackConfig)
+    ) -> (VisitableOutcome<'a, S, ServerOutcome<S>>, S::Feedback)
     where
         S: VisitOutcome,
     {

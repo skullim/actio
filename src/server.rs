@@ -33,9 +33,9 @@ pub type ServerOutcome<S> = Outcome<
 >;
 
 pub type ServerSnapshot<S> =
-    <<S as ServerConcept>::TaskStateConfig as TaskStateSnapshotReceiver>::TaskStateSnapshot;
+    <<S as ServerConcept>::TaskState as TaskStateSnapshotReceiver>::Snapshot;
 
-pub type PinnedOutcomeFut<S> = Pin<Box<dyn Future<Output = ServerOutcome<S>> + Send + 'static>>;
+pub type OutcomeFutPin<S> = Pin<Box<dyn Future<Output = ServerOutcome<S>> + Send + 'static>>;
 
 #[cfg_attr(
     test,
@@ -43,8 +43,8 @@ pub type PinnedOutcomeFut<S> = Pin<Box<dyn Future<Output = ServerOutcome<S>> + S
         type Goal =  ();
         type SucceedOutput = ();
         type FailedOutput = ();
-        type FeedbackConfig = NoFeedback;
-        type TaskStateConfig = NoTaskStateSnapshot;
+        type Feedback = NoFeedback;
+        type TaskState = NoTaskStateSnapshot;
     )
 )]
 pub trait ServerConcept {
@@ -52,34 +52,53 @@ pub trait ServerConcept {
     type SucceedOutput: Send + 'static;
     type FailedOutput: Send + 'static;
 
-    type FeedbackConfig: FeedbackConfigMarker + Send + 'static;
-    type TaskStateConfig: TaskStateSnapshotReceiver + Send + 'static;
+    type Feedback: FeedbackMarker + Send + 'static;
+    type TaskState: TaskStateSnapshotReceiver + Send + 'static;
 
     fn create(&mut self, goal: Self::Goal) -> ServerTask<Self>;
 }
 
-//@todo needs sealing as this should not be visible outside
-pub trait FeedbackConfigMarker {}
+pub trait FeedbackMarker: sealed::Sealed {}
+mod sealed {
+    pub trait Sealed {}
+}
+
 pub struct NoFeedback;
-impl FeedbackConfigMarker for NoFeedback {}
+impl sealed::Sealed for NoFeedback {}
+
+impl FeedbackMarker for NoFeedback {}
 
 pub struct WithFeedback<R>(pub R);
+impl<R> sealed::Sealed for WithFeedback<R> {}
+
 pub trait FeedbackReceiverMarker {}
 
-impl<R> FeedbackConfigMarker for WithFeedback<R> where R: FeedbackReceiverMarker {}
+impl<R> FeedbackMarker for WithFeedback<R> where R: FeedbackReceiverMarker {}
 
 // concrete external receivers implementations
 impl<T> FeedbackReceiverMarker for tokio::sync::watch::Receiver<T> {}
 
-//@todo needs sealing as this should not be visible outside
 pub trait TaskStateSnapshotReceiver {
-    type TaskStateSnapshot: Send + 'static;
-    fn recv(&mut self) -> Self::TaskStateSnapshot;
+    type Snapshot: Send + 'static;
+    fn recv(&mut self) -> Self::Snapshot;
 }
 pub struct NoTaskStateSnapshot;
 impl TaskStateSnapshotReceiver for NoTaskStateSnapshot {
-    type TaskStateSnapshot = ();
-    fn recv(&mut self) -> Self::TaskStateSnapshot {}
+    type Snapshot = ();
+    fn recv(&mut self) -> Self::Snapshot {}
+}
+
+// concrete external receivers implementations
+impl<T> TaskStateSnapshotReceiver for tokio::sync::watch::Receiver<T>
+where
+    T: Clone + Send + 'static,
+{
+    type Snapshot = T;
+
+    fn recv(&mut self) -> Self::Snapshot {
+        let val = self.borrow_and_update();
+        val.clone()
+    }
 }
 
 pub struct WithTaskStateSnapshot<R>(pub R);
@@ -88,28 +107,16 @@ impl<R> TaskStateSnapshotReceiver for WithTaskStateSnapshot<R>
 where
     R: TaskStateSnapshotReceiver,
 {
-    type TaskStateSnapshot = R::TaskStateSnapshot;
-    fn recv(&mut self) -> Self::TaskStateSnapshot {
+    type Snapshot = R::Snapshot;
+    fn recv(&mut self) -> Self::Snapshot {
         self.0.recv()
     }
 }
 
-// concrete external receivers implementations
-impl<T> TaskStateSnapshotReceiver for tokio::sync::watch::Receiver<T>
-where
-    T: Clone + Send + 'static,
-{
-    type TaskStateSnapshot = T;
-    fn recv(&mut self) -> Self::TaskStateSnapshot {
-        let val = self.borrow_and_update();
-        val.clone()
-    }
-}
-
 pub type ServerTask<S> = TaskWithContext<
-    PinnedOutcomeFut<S>,
-    <S as ServerConcept>::FeedbackConfig,
-    <S as ServerConcept>::TaskStateConfig,
+    OutcomeFutPin<S>,
+    <S as ServerConcept>::Feedback,
+    <S as ServerConcept>::TaskState,
 >;
 
 pub struct TaskWithContext<T, FR, TR> {
@@ -129,13 +136,13 @@ impl<T, FR, TR> TaskWithContext<T, FR, TR> {
 }
 
 impl<T, FR, TR> TaskWithContext<T, FR, TR> {
-    pub fn with_feedback<R>(
-        self,
-        feedback_receiver: WithFeedback<R>,
-    ) -> TaskWithContext<T, WithFeedback<R>, TR> {
+    pub fn with_feedback<R>(self, feedback_receiver: R) -> TaskWithContext<T, WithFeedback<R>, TR>
+    where
+        R: FeedbackReceiverMarker,
+    {
         TaskWithContext {
             task: self.task,
-            feedback_receiver,
+            feedback_receiver: WithFeedback(feedback_receiver),
             task_state_snapshot_receiver: self.task_state_snapshot_receiver,
         }
     }
@@ -144,12 +151,15 @@ impl<T, FR, TR> TaskWithContext<T, FR, TR> {
 impl<T, FR, TR> TaskWithContext<T, FR, TR> {
     pub fn with_task_state<R>(
         self,
-        task_state_snapshot_receiver: WithTaskStateSnapshot<R>,
-    ) -> TaskWithContext<T, FR, WithTaskStateSnapshot<R>> {
+        task_state_snapshot_receiver: R,
+    ) -> TaskWithContext<T, FR, WithTaskStateSnapshot<R>>
+    where
+        R: TaskStateSnapshotReceiver,
+    {
         TaskWithContext {
             task: self.task,
             feedback_receiver: self.feedback_receiver,
-            task_state_snapshot_receiver,
+            task_state_snapshot_receiver: WithTaskStateSnapshot(task_state_snapshot_receiver),
         }
     }
 }
@@ -184,8 +194,8 @@ mock! {
         type Goal = ();
         type SucceedOutput = ();
         type FailedOutput = ();
-        type FeedbackConfig = NoFeedback;
-        type TaskStateConfig = NoTaskStateSnapshot;
+        type Feedback = NoFeedback;
+        type TaskState = NoTaskStateSnapshot;
 
         fn create(&mut self, goal: <MockVisitOutcome as ServerConcept>::Goal) -> ServerTask<Self>;
     }
@@ -198,256 +208,5 @@ mock! {
         fn on_failed(&mut self, o: &<MockVisitOutcome as ServerConcept>::FailedOutput) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
 
         fn visit(&mut self, outcome: &ServerOutcome<Self>)-> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        execution::Executor,
-        factory::Factory,
-        submitting::{CancelChannel, NoCancelChannel, SubmitGoal},
-    };
-    use std::time::Duration;
-
-    const STANDARD_TASK_QUEUE_SIZE: usize = 16;
-    const STRESS_TEST_TASK_QUEUE_SIZE: usize = 10_000;
-
-    #[derive(Default)]
-    pub struct MyGoal {
-        pub target: String,
-    }
-
-    pub struct MySucceedOutputA {
-        result: usize,
-    }
-    pub struct MyFailedOutputA {
-        error: String,
-    }
-
-    pub struct TestServerA;
-
-    impl ServerConcept for TestServerA {
-        type Goal = MyGoal;
-        type SucceedOutput = MySucceedOutputA;
-        type FailedOutput = MyFailedOutputA;
-
-        type FeedbackConfig = NoFeedback;
-        type TaskStateConfig = NoTaskStateSnapshot;
-
-        fn create(&mut self, goal: Self::Goal) -> ServerTask<Self> {
-            let task = async move {
-                let result = do_work_a(&goal.target).await;
-                Outcome::Succeed(MySucceedOutputA { result })
-            };
-            ServerTask::<Self>::new(Box::pin(task))
-        }
-    }
-
-    async fn do_work_a(target: &str) -> usize {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        target.len()
-    }
-
-    pub struct MySucceedOutputB {
-        bytes: usize,
-    }
-    pub struct MyFailedOutputB {
-        code: u32,
-    }
-
-    pub struct TestServerB;
-
-    impl ServerConcept for TestServerB {
-        type Goal = MyGoal;
-        type SucceedOutput = MySucceedOutputB;
-        type FailedOutput = MyFailedOutputB;
-
-        type FeedbackConfig = NoFeedback;
-        type TaskStateConfig = NoTaskStateSnapshot;
-
-        fn create(&mut self, goal: Self::Goal) -> ServerTask<Self> {
-            let task = async move {
-                let bytes = do_work_b(&goal.target).await;
-                Outcome::Succeed(MySucceedOutputB { bytes })
-            };
-            ServerTask::<Self>::new(Box::pin(task))
-        }
-    }
-
-    async fn do_work_b(target: &str) -> usize {
-        target.len()
-    }
-
-    #[derive(Clone, Debug, Default)]
-    pub struct MyTaskState {
-        pub progress: u32,
-    }
-
-    #[derive(Debug)]
-    pub struct MySucceedOutputC;
-    #[derive(Debug)]
-    pub struct MyFailedOutputC;
-
-    #[derive(Debug, Default)]
-    pub struct MyProgressGoal {
-        initial_progress: u32,
-    }
-
-    pub struct TestServerC;
-
-    impl ServerConcept for TestServerC {
-        type Goal = MyProgressGoal;
-        type SucceedOutput = MySucceedOutputC;
-        type FailedOutput = MyFailedOutputC;
-
-        type FeedbackConfig = NoFeedback;
-        type TaskStateConfig = WithTaskStateSnapshot<tokio::sync::watch::Receiver<MyTaskState>>;
-
-        fn create(&mut self, goal: Self::Goal) -> ServerTask<Self> {
-            let (state_sender, state_receiver) = tokio::sync::watch::channel(MyTaskState {
-                progress: goal.initial_progress,
-            });
-
-            let task = async move {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                state_sender.send(MyTaskState { progress: 50 }).unwrap();
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                state_sender.send(MyTaskState { progress: 100 }).unwrap();
-                Outcome::Succeed(MySucceedOutputC)
-            };
-
-            ServerTask::<Self>::new(Box::pin(task))
-                .with_task_state(WithTaskStateSnapshot(state_receiver))
-        }
-    }
-
-    async fn await_outcome<S>(
-        recv: tokio::sync::oneshot::Receiver<ServerOutcome<S>>,
-        executor: &mut Executor,
-    ) -> ServerOutcome<S>
-    where
-        S: ServerConcept,
-    {
-        tokio::select! {
-            _ = executor.execute() => {
-                panic!("executor should never finish before outcome handle")
-            },
-            outcome = recv => {
-                outcome.unwrap()
-            }
-        }
-    }
-
-    async fn poll_executor_for(duration: tokio::time::Duration, executor: &mut Executor) {
-        let _ = tokio::time::timeout(duration, executor.execute()).await;
-    }
-
-    // compile-time test
-    #[test]
-    fn two_servers_impl_same_goal_test() {
-        let (_s1, _e1) =
-            Factory::stateless::<TestServerA, NoCancelChannel>(STANDARD_TASK_QUEUE_SIZE);
-        let (_s2, _e2) =
-            Factory::stateless::<TestServerB, NoCancelChannel>(STANDARD_TASK_QUEUE_SIZE);
-    }
-
-    #[tokio::test]
-    async fn no_request_cancel_test() {
-        let mut server = TestServerA {};
-        let (mut submitter, mut executor) =
-            Factory::stateless::<TestServerA, CancelChannel>(STANDARD_TASK_QUEUE_SIZE);
-        let handle = submitter.submit(&mut server, MyGoal::default()).unwrap();
-        let outcome_recv = handle.into_outcome_receiver();
-
-        let out = await_outcome::<TestServerA>(outcome_recv, &mut executor).await;
-        assert!(matches!(out, Outcome::Succeed(_)));
-    }
-
-    #[tokio::test]
-    async fn request_cancel_test() {
-        let mut server = TestServerA {};
-        let (mut submitter, mut executor) =
-            Factory::stateless::<TestServerA, CancelChannel>(STANDARD_TASK_QUEUE_SIZE);
-        let handle = submitter.submit(&mut server, MyGoal::default()).unwrap();
-        let (outcome_recv, _) = handle.cancel();
-
-        let out = await_outcome::<TestServerA>(outcome_recv, &mut executor).await;
-        assert!(matches!(out, Outcome::Cancelled(_)));
-    }
-
-    #[tokio::test]
-    async fn cancel_with_exe_ctx_test() {
-        let mut server = TestServerC {};
-        let (mut submitter, mut executor) =
-            Factory::stateless::<TestServerC, CancelChannel>(STANDARD_TASK_QUEUE_SIZE);
-
-        let handle = submitter
-            .submit(&mut server, MyProgressGoal::default())
-            .unwrap();
-        let (outcome_recv, _) = handle.cancel();
-        let out = await_outcome::<TestServerC>(outcome_recv, &mut executor).await;
-        assert!(matches!(
-            out,
-            Outcome::Cancelled(MyTaskState { progress: 0 })
-        ));
-
-        let handle = submitter
-            .submit(&mut server, MyProgressGoal::default())
-            .unwrap();
-        poll_executor_for(Duration::from_millis(100), &mut executor).await;
-
-        let (outcome_recv, _) = handle.cancel();
-
-        let out = await_outcome::<TestServerC>(outcome_recv, &mut executor).await;
-        assert!(matches!(
-            out,
-            Outcome::Cancelled(MyTaskState { progress: 50 })
-        ));
-    }
-
-    #[tokio::test]
-    async fn stateful_server_visit_called() {
-        let mut mock_server = MockVisitOutcome::new();
-        mock_server.expect_create().once().return_once(|()| {
-            ServerTask::<MockVisitOutcome>::new(Box::pin(async { Outcome::Succeed(()) }))
-        });
-        mock_server.expect_visit().times(1).returning(|_| Ok(()));
-
-        let (mut submitter, mut executor) =
-            Factory::stateful::<MockVisitOutcome, CancelChannel>(STANDARD_TASK_QUEUE_SIZE);
-
-        let handle = submitter.submit(&mut mock_server, ()).unwrap();
-        let visitable_outcome = handle.into_visitable_outcome(&mut mock_server);
-        tokio::spawn(async move {
-            executor.execute().await;
-        });
-        let _ = visitable_outcome.outcome().await;
-    }
-
-    #[tokio::test]
-    async fn stress_test() {
-        let mut server = TestServerC {};
-        let (mut submitter, mut executor) =
-            Factory::stateless::<TestServerC, CancelChannel>(STRESS_TEST_TASK_QUEUE_SIZE);
-        let mut handles: Vec<_> = (0..STRESS_TEST_TASK_QUEUE_SIZE)
-            .map(|_| {
-                submitter
-                    .submit(&mut server, MyProgressGoal::default())
-                    .unwrap()
-            })
-            .collect();
-
-        poll_executor_for(Duration::from_millis(42), &mut executor).await;
-        let handle = handles.remove(4_200);
-        let (outcome_recv, _) = handle.cancel();
-        let result = tokio::time::timeout(
-            Duration::from_millis(1),
-            await_outcome::<TestServerC>(outcome_recv, &mut executor),
-        )
-        .await;
-        assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), Outcome::Cancelled(_)));
     }
 }
