@@ -118,9 +118,9 @@ pub struct TaskWithContext<T, FR, TR> {
     pub(crate) task_state_snapshot_receiver: TR,
 }
 
-impl<T> TaskWithContext<T, NoFeedback, NoTaskStateSnapshot> {
-    pub fn new(task: T) -> Self {
-        Self {
+impl<T, FR, TR> TaskWithContext<T, FR, TR> {
+    pub fn new(task: T) -> TaskWithContext<T, NoFeedback, NoTaskStateSnapshot> {
+        TaskWithContext {
             task,
             feedback_receiver: NoFeedback,
             task_state_snapshot_receiver: NoTaskStateSnapshot,
@@ -128,35 +128,27 @@ impl<T> TaskWithContext<T, NoFeedback, NoTaskStateSnapshot> {
     }
 }
 
-impl<T, R> TaskWithContext<T, WithFeedback<R>, NoTaskStateSnapshot> {
-    pub fn new(task: T, feedback_receiver: WithFeedback<R>) -> Self {
-        Self {
-            task,
+impl<T, FR, TR> TaskWithContext<T, FR, TR> {
+    pub fn with_feedback<R>(
+        self,
+        feedback_receiver: WithFeedback<R>,
+    ) -> TaskWithContext<T, WithFeedback<R>, TR> {
+        TaskWithContext {
+            task: self.task,
             feedback_receiver,
-            task_state_snapshot_receiver: NoTaskStateSnapshot,
+            task_state_snapshot_receiver: self.task_state_snapshot_receiver,
         }
     }
 }
 
-impl<T, R> TaskWithContext<T, NoFeedback, WithTaskStateSnapshot<R>> {
-    pub fn new(task: T, task_state_snapshot_receiver: WithTaskStateSnapshot<R>) -> Self {
-        Self {
-            task,
-            feedback_receiver: NoFeedback,
-            task_state_snapshot_receiver,
-        }
-    }
-}
-
-impl<T, FR, TR> TaskWithContext<T, WithFeedback<FR>, WithTaskStateSnapshot<TR>> {
-    pub fn new(
-        task: T,
-        feedback_receiver: WithFeedback<FR>,
-        task_state_snapshot_receiver: WithTaskStateSnapshot<TR>,
-    ) -> Self {
-        Self {
-            task,
-            feedback_receiver,
+impl<T, FR, TR> TaskWithContext<T, FR, TR> {
+    pub fn with_task_state<R>(
+        self,
+        task_state_snapshot_receiver: WithTaskStateSnapshot<R>,
+    ) -> TaskWithContext<T, FR, WithTaskStateSnapshot<R>> {
+        TaskWithContext {
+            task: self.task,
+            feedback_receiver: self.feedback_receiver,
             task_state_snapshot_receiver,
         }
     }
@@ -326,11 +318,12 @@ mod tests {
                 Outcome::Succeed(MySucceedOutputC)
             };
 
-            ServerTask::<Self>::new(Box::pin(task), WithTaskStateSnapshot(state_receiver))
+            ServerTask::<Self>::new(Box::pin(task))
+                .with_task_state(WithTaskStateSnapshot(state_receiver))
         }
     }
 
-    async fn execute_till_outcome<S>(
+    async fn await_outcome<S>(
         recv: tokio::sync::oneshot::Receiver<ServerOutcome<S>>,
         executor: &mut Executor,
     ) -> ServerOutcome<S>
@@ -368,7 +361,7 @@ mod tests {
         let handle = submitter.submit(&mut server, MyGoal::default()).unwrap();
         let outcome_recv = handle.into_outcome_receiver();
 
-        let out = execute_till_outcome::<TestServerA>(outcome_recv, &mut executor).await;
+        let out = await_outcome::<TestServerA>(outcome_recv, &mut executor).await;
         assert!(matches!(out, Outcome::Succeed(_)));
     }
 
@@ -380,7 +373,7 @@ mod tests {
         let handle = submitter.submit(&mut server, MyGoal::default()).unwrap();
         let (outcome_recv, _) = handle.cancel();
 
-        let out = execute_till_outcome::<TestServerA>(outcome_recv, &mut executor).await;
+        let out = await_outcome::<TestServerA>(outcome_recv, &mut executor).await;
         assert!(matches!(out, Outcome::Cancelled(_)));
     }
 
@@ -394,7 +387,7 @@ mod tests {
             .submit(&mut server, MyProgressGoal::default())
             .unwrap();
         let (outcome_recv, _) = handle.cancel();
-        let out = execute_till_outcome::<TestServerC>(outcome_recv, &mut executor).await;
+        let out = await_outcome::<TestServerC>(outcome_recv, &mut executor).await;
         assert!(matches!(
             out,
             Outcome::Cancelled(MyTaskState { progress: 0 })
@@ -407,7 +400,7 @@ mod tests {
 
         let (outcome_recv, _) = handle.cancel();
 
-        let out = execute_till_outcome::<TestServerC>(outcome_recv, &mut executor).await;
+        let out = await_outcome::<TestServerC>(outcome_recv, &mut executor).await;
         assert!(matches!(
             out,
             Outcome::Cancelled(MyTaskState { progress: 50 })
@@ -451,7 +444,7 @@ mod tests {
         let (outcome_recv, _) = handle.cancel();
         let result = tokio::time::timeout(
             Duration::from_millis(1),
-            execute_till_outcome::<TestServerC>(outcome_recv, &mut executor),
+            await_outcome::<TestServerC>(outcome_recv, &mut executor),
         )
         .await;
         assert!(result.is_ok());

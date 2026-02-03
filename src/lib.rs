@@ -1,14 +1,14 @@
 use std::pin::Pin;
 use thiserror::Error as ThisError;
 
-pub mod execution;
-pub mod factory;
-pub mod server;
-pub mod submitting;
-pub mod task_handle;
+mod execution;
+mod factory;
+mod server;
+mod submitting;
+mod task_handle;
 
 type TaskBox = Box<dyn Future<Output = ()> + Send + 'static>;
-pub(crate) type PinnedTask = Pin<TaskBox>;
+pub(crate) type TaskPin = Pin<TaskBox>;
 
 #[derive(Debug, ThisError)]
 pub enum Error {
@@ -19,3 +19,15 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub use execution::Executor;
+pub use factory::Factory;
+pub use server::{
+    FeedbackReceiverMarker, NoFeedback, NoTaskStateSnapshot, Outcome, ServerConcept, ServerOutcome,
+    ServerSnapshot, ServerTask, VisitOutcome, WithFeedback, WithTaskStateSnapshot,
+};
+pub use submitting::{CancelChannel, NoCancelChannel, SubmitGoal};
+pub use task_handle::{NoCancel, StatefulTaskHandle, TaskHandle, VisitableOutcome, WithCancel};
+
+#[cfg(test)]
+pub use server::{MockServerConcept, MockVisitOutcome};

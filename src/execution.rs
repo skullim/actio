@@ -6,15 +6,15 @@ use std::future::poll_fn;
 use std::task::Poll;
 use tracing::trace;
 
-use crate::PinnedTask;
+use crate::TaskPin;
 
 pub struct Executor {
-    tasks: FuturesUnordered<PinnedTask>,
-    task_receiver: Receiver<PinnedTask>,
+    tasks: FuturesUnordered<TaskPin>,
+    task_receiver: Receiver<TaskPin>,
 }
 
 impl Executor {
-    pub(crate) fn new(task_receiver: Receiver<PinnedTask>) -> Self {
+    pub(crate) fn new(task_receiver: Receiver<TaskPin>) -> Self {
         Self {
             task_receiver,
             tasks: FuturesUnordered::new(),
@@ -32,15 +32,22 @@ impl Executor {
             });
 
             tokio::select! {
-                Some(task) = self.task_receiver.recv() => {
-                    trace!("pushing new task");
-                    self.tasks.push(task);
+                task = self.task_receiver.recv() => {
+                    match task {
+                        Some(task) => {
+                            trace!("pushing new task");
+                            self.tasks.push(task);
+                        }
+                        None => {
+                            trace!("task channel closed");
+                            break;
+                        }
+                    }
+
                 },
                 _ = execute_next_task_fut => {
                     trace!("finished executing task");
-
-                }
-
+                },
             }
         }
     }

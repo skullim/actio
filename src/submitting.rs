@@ -4,7 +4,7 @@ use crate::server::{Outcome, ServerConcept, ServerOutcome, TaskStateSnapshotRece
 use crate::task_handle::{
     CancelConfigMarker, NoCancel, StatefulTaskHandle, TaskHandle, WithCancel,
 };
-use crate::{Error, PinnedTask, Result};
+use crate::{Error, Result, TaskPin};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 
@@ -16,12 +16,12 @@ pub trait SubmitGoal<G> {
 }
 
 pub(crate) struct GoalSubmitter<S, CF> {
-    task_sender: Sender<PinnedTask>,
+    task_sender: Sender<TaskPin>,
     phantom: PhantomData<(S, CF)>,
 }
 
 impl<S, CF> GoalSubmitter<S, CF> {
-    pub fn new(task_sender: Sender<PinnedTask>) -> Self {
+    pub fn new(task_sender: Sender<TaskPin>) -> Self {
         Self {
             task_sender,
             phantom: PhantomData,
