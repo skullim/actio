@@ -1,22 +1,5 @@
-// Capabilities that change the server async task
-// 1. Sending result (req)
-// 2. cancelling future (opt)
-// 3. sending task execution ctx on cancel (opt)
-
-// Data needed when creating server task
-// 1. Task (req)
-// 2. Feedback (receiver) (opt)
-// 3. Task execution ctx (receiver) (opt)
-// Both affect how Task Handle is built
-
-// Different Task Handles that contain 0 or 1 of followings:
-// 1. result receiver (req)
-// 2. cancel sender (opt)
-// 3. feedback receiver (opt)
-// 4. act as wrapper to await result, but let server visit result (supports stateful server) (opt)
-#[cfg(test)]
-use mockall::{automock, mock};
 use std::pin::Pin;
+use tokio::sync::watch;
 
 ///TEX: task execution context
 #[derive(Debug)]
@@ -34,16 +17,6 @@ pub type ServerSnapshot<S> =
 
 pub type OutcomeFutPin<S> = Pin<Box<dyn Future<Output = ServerOutcome<S>> + Send + 'static>>;
 
-#[cfg_attr(
-    test,
-    automock(
-        type Goal =  ();
-        type Succeed = ();
-        type Failed = ();
-        type Feedback = NoFeedback;
-        type TaskState = NoTaskStateSnapshot;
-    )
-)]
 pub trait ServerConcept {
     type Goal: Send + 'static;
     type Succeed: Send + 'static;
@@ -68,12 +41,14 @@ impl FeedbackMarker for NoFeedback {}
 pub struct WithFeedback<R>(pub R);
 impl<R> sealed::Sealed for WithFeedback<R> {}
 
+pub type WithFeedbackWatch<T> = WithFeedback<watch::Receiver<T>>;
+
 pub trait FeedbackReceiverMarker {}
 
 impl<R> FeedbackMarker for WithFeedback<R> where R: FeedbackReceiverMarker {}
 
 // concrete external receivers implementations
-impl<T> FeedbackReceiverMarker for tokio::sync::watch::Receiver<T> {}
+impl<T> FeedbackReceiverMarker for watch::Receiver<T> {}
 
 pub trait TaskStateSnapshotReceiver {
     type Snapshot: Send + 'static;
@@ -86,7 +61,7 @@ impl TaskStateSnapshotReceiver for NoTaskStateSnapshot {
 }
 
 // concrete external receivers implementations
-impl<T> TaskStateSnapshotReceiver for tokio::sync::watch::Receiver<T>
+impl<T> TaskStateSnapshotReceiver for watch::Receiver<T>
 where
     T: Clone + Send + 'static,
 {
@@ -99,6 +74,8 @@ where
 }
 
 pub struct WithTaskStateSnapshot<R>(pub R);
+
+pub type WithTaskStateSnapshotWatch<T> = WithTaskStateSnapshot<watch::Receiver<T>>;
 
 impl<R> TaskStateSnapshotReceiver for WithTaskStateSnapshot<R>
 where
@@ -180,30 +157,5 @@ pub trait VisitOutcome: ServerConcept {
             Outcome::Cancelled(c) => self.on_cancelled(c),
             Outcome::Failed(f) => self.on_failed(f),
         }
-    }
-}
-
-#[cfg(test)]
-mock! {
-    pub VisitOutcome {}
-
-    impl ServerConcept for VisitOutcome {
-        type Goal = ();
-        type Succeed = ();
-        type Failed = ();
-        type Feedback = NoFeedback;
-        type TaskState = NoTaskStateSnapshot;
-
-        fn create(&mut self, goal: <MockVisitOutcome as ServerConcept>::Goal) -> ServerTask<Self>;
-    }
-
-    impl VisitOutcome for VisitOutcome {
-        type Error = anyhow::Error;
-
-        fn on_succeed(&mut self, o: &<MockVisitOutcome as ServerConcept>::Succeed) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
-        fn on_cancelled(&mut self, o: &ServerSnapshot<Self>) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
-        fn on_failed(&mut self, o: &<MockVisitOutcome as ServerConcept>::Failed) -> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
-
-        fn visit(&mut self, outcome: &ServerOutcome<Self>)-> Result<(), <MockVisitOutcome as VisitOutcome>::Error>;
     }
 }

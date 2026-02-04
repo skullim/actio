@@ -1,3 +1,4 @@
+#[doc = include_str!("../README.md")]
 use std::pin::Pin;
 use thiserror::Error as ThisError;
 
@@ -24,10 +25,8 @@ pub use execution::Executor;
 pub use factory::Factory;
 pub use server::{
     FeedbackReceiverMarker, NoFeedback, NoTaskStateSnapshot, Outcome, ServerConcept, ServerOutcome,
-    ServerSnapshot, ServerTask, VisitOutcome, WithFeedback, WithTaskStateSnapshot,
+    ServerSnapshot, ServerTask, VisitOutcome, WithFeedback, WithFeedbackWatch,
+    WithTaskStateSnapshot, WithTaskStateSnapshotWatch,
 };
 pub use submitting::{CancelChannel, NoCancelChannel, SubmitGoal};
 pub use task_handle::{NoCancel, StatefulTaskHandle, TaskHandle, VisitableOutcome, WithCancel};
-
-#[cfg(test)]
-pub use server::{MockServerConcept, MockVisitOutcome};

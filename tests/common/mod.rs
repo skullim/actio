@@ -32,13 +32,15 @@ pub mod impls {
     }
 
     pub mod a {
+        use actio::{NoFeedback, NoTaskStateSnapshot, Outcome, ServerConcept, ServerTask};
         use std::time::Duration;
 
-        use actio::{NoFeedback, NoTaskStateSnapshot, Outcome, ServerConcept, ServerTask};
-
+        #[allow(dead_code)]
         pub struct SucceedOutput {
             result: usize,
         }
+
+        #[allow(dead_code)]
         pub struct FailedOutput {
             error: String,
         }
@@ -71,9 +73,11 @@ pub mod impls {
     pub mod b {
         use actio::{NoFeedback, NoTaskStateSnapshot, Outcome, ServerConcept, ServerTask};
 
+        #[allow(dead_code)]
         pub struct MySucceedOutput {
             bytes: usize,
         }
+        #[allow(dead_code)]
         pub struct MyFailedOutput {
             code: u32,
         }
@@ -103,7 +107,7 @@ pub mod impls {
     }
 
     pub mod c {
-        use actio::{NoFeedback, Outcome, ServerConcept, ServerTask, WithTaskStateSnapshot};
+        use actio::{NoFeedback, Outcome, ServerConcept, ServerTask, WithTaskStateSnapshotWatch};
         use std::time::Duration;
 
         #[derive(Clone, Debug, Default)]
@@ -129,7 +133,7 @@ pub mod impls {
             type Failed = FailedOutput;
 
             type Feedback = NoFeedback;
-            type TaskState = WithTaskStateSnapshot<tokio::sync::watch::Receiver<TaskState>>;
+            type TaskState = WithTaskStateSnapshotWatch<TaskState>;
 
             fn create(&mut self, goal: Self::Goal) -> ServerTask<Self> {
                 let (state_sender, state_receiver) = tokio::sync::watch::channel(TaskState {
