@@ -33,9 +33,8 @@ impl<R, C, F> GenericTaskHandle<R, C, F> {
 }
 pub struct NoCancel;
 
-// do not expose the sender: cancelling is one-shot action that is guarded by SendCancel trait
+/// Cancellation enabled wrapper around a cancel-sender (capability-guarded).
 pub struct WithCancel<S>(S);
-
 impl<S> WithCancel<S> {
     pub(crate) fn new(sender: S) -> Self {
         Self(sender)
@@ -81,6 +80,7 @@ impl<R, C, Rx> GenericTaskHandle<R, C, WithFeedback<Rx>> {
     }
 }
 
+/// Stateful task handle: lets the server visit the terminal outcome before returning it.
 pub struct StatefulTaskHandle<S, CF>
 where
     S: ServerConcept,
@@ -107,6 +107,7 @@ where
     }
 }
 
+/// Future-like wrapper that awaits the outcome and then calls [`VisitOutcome::visit`].
 pub struct VisitableOutcome<'a, S, O> {
     server: &'a mut S,
     receiver: oneshot::Receiver<O>,

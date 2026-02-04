@@ -1,22 +1,32 @@
 use std::pin::Pin;
 use tokio::sync::watch;
 
-///TEX: task execution context
-#[derive(Debug)]
+/// Terminal outcome of a task.
+///
+/// `S` is the success value, `TEX` is task execution context captured on cancellation
+/// (typically a snapshot of last known state), and `F` is the failure value.
+#[derive(Debug, Clone, Copy)]
 pub enum Outcome<S, TEX, F> {
     Succeed(S),
     Cancelled(TEX),
     Failed(F),
 }
 
+/// Convenience alias for the outcome type produced by a specific [`ServerConcept`].
 pub type ServerOutcome<S> =
     Outcome<<S as ServerConcept>::Succeed, ServerSnapshot<S>, <S as ServerConcept>::Failed>;
 
+/// Snapshot type exposed to the client when a task is cancelled.
 pub type ServerSnapshot<S> =
     <<S as ServerConcept>::TaskState as TaskStateSnapshotReceiver>::Snapshot;
 
 pub type OutcomeFutPin<S> = Pin<Box<dyn Future<Output = ServerOutcome<S>> + Send + 'static>>;
 
+/// Server-side contract: turn a `Goal` into a task plus optional feedback and optional state snapshot.
+///
+/// The `Feedback` and `TaskState` associated types act as *capabilities*:
+/// use [`NoFeedback`] / [`NoTaskStateSnapshot`] to opt out, or wrappers like
+/// [`WithFeedbackWatch`] / [`WithTaskStateSnapshotWatch`] to opt in.
 pub trait ServerConcept {
     type Goal: Send + 'static;
     type Succeed: Send + 'static;
@@ -41,6 +51,9 @@ impl FeedbackMarker for NoFeedback {}
 pub struct WithFeedback<R>(pub R);
 impl<R> sealed::Sealed for WithFeedback<R> {}
 
+/// Default feedback receiver wrapper based on `tokio::sync::watch`.
+///
+/// Note: watch has “latest value” semantics (not a buffered stream).
 pub type WithFeedbackWatch<T> = WithFeedback<watch::Receiver<T>>;
 
 pub trait FeedbackReceiverMarker {}
@@ -50,6 +63,9 @@ impl<R> FeedbackMarker for WithFeedback<R> where R: FeedbackReceiverMarker {}
 // concrete external receivers implementations
 impl<T> FeedbackReceiverMarker for watch::Receiver<T> {}
 
+/// Capability for retrieving a snapshot of the last task execution state.
+///
+/// This is used when producing [`Outcome::Cancelled`].
 pub trait TaskStateSnapshotReceiver {
     type Snapshot: Send + 'static;
     fn recv(&mut self) -> Self::Snapshot;
@@ -75,6 +91,7 @@ where
 
 pub struct WithTaskStateSnapshot<R>(pub R);
 
+/// Default task-state snapshot receiver wrapper based on `tokio::sync::watch`.
 pub type WithTaskStateSnapshotWatch<T> = WithTaskStateSnapshot<watch::Receiver<T>>;
 
 impl<R> TaskStateSnapshotReceiver for WithTaskStateSnapshot<R>
@@ -93,6 +110,7 @@ pub type ServerTask<S> = TaskWithContext<
     <S as ServerConcept>::TaskState,
 >;
 
+/// A task together with optional feedback and optional task-state snapshot receivers.
 pub struct TaskWithContext<T, FR, TR> {
     pub(crate) task: T,
     pub(crate) feedback_receiver: FR,
@@ -138,9 +156,12 @@ impl<T, FR, TR> TaskWithContext<T, FR, TR> {
     }
 }
 
+/// Optional extension trait for “stateful servers”.
+/// Implement this if you want to update server state based on the terminal [`ServerOutcome`]
+/// (e.g., on success/cancel/failure).
+/// Default implementation does nothing, only implement methods you are interested in
 pub trait VisitOutcome: ServerConcept {
     type Error;
-    // user implements methods that is interested in
     fn on_succeed(&mut self, _o: &Self::Succeed) -> Result<(), Self::Error> {
         Ok(())
     }

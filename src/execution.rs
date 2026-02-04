@@ -6,6 +6,11 @@ use tracing::{trace, warn};
 
 use crate::TaskPin;
 
+/// Drives submitted tasks to completion.
+///
+/// Receives tasks from an internal queue and polls all in-flight tasks.
+/// Note: `FuturesUnordered` completes with `None` when empty, so `execute()` uses
+/// a small `poll_fn` shim to treat “empty” as “not ready yet”.
 pub struct Executor {
     tasks: FuturesUnordered<TaskPin>,
     task_receiver: Receiver<TaskPin>,
@@ -18,7 +23,7 @@ impl Executor {
             tasks: FuturesUnordered::new(),
         }
     }
-
+    /// Poll submitted tasks
     pub async fn execute(&mut self) {
         loop {
             let next_task_poll_fn = poll_fn(|cx| {

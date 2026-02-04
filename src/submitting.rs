@@ -7,6 +7,9 @@ use crate::task_handle::{
 use crate::{Error, Result, TaskPin};
 use futures::channel::{mpsc::Sender, oneshot};
 
+/// Goal submission interface.
+/// Dispatches a `Goal` to a concrete [`ServerConcept`] implementation, enqueues the resulting task
+/// for execution, and returns a handle to interact with the task.
 pub trait SubmitGoal<G> {
     type TaskHandle;
     type Server: ServerConcept;
@@ -112,7 +115,7 @@ pub trait CancelReceiver: Send + 'static {
 
 impl CancelReceiver for oneshot::Receiver<()> {
     async fn recv(self) {
-        // error only occurs if sender has been dropped.
+        // Error only occurs if sender has been dropped.
         // However this can happen only if the client is not interested in cancelling the task,
         // hence at this stage the cancel capability is downgraded into NoCancel
         if self.await.is_err() {
@@ -130,6 +133,7 @@ impl CancelReceiver for NoCancelReceiver {
     }
 }
 
+/// Cancellation-disabled channel factory
 pub struct NoCancelChannel;
 
 impl CancelChannelFactory for NoCancelChannel {
@@ -139,6 +143,7 @@ impl CancelChannelFactory for NoCancelChannel {
     }
 }
 
+/// Cancellation-enabled channel factory (one-shot cancel)
 pub struct CancelChannel;
 
 impl CancelChannelFactory for CancelChannel {
