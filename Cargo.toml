@@ -1,10 +1,14 @@
 [package]
 name = "actio"
-version = "0.1.0"
-description = "Framework for long-running async actions: feedback stream, cancellation, and terminal result. Implementation details in the upcoming release."
+version = "0.2.0"
+authors = ["Adrian Skulimowski"]
+description = "Library for long‑running IO bound async tasks that optionally produce a feedback updates, support cancellation, and eventually resolve to a terminal outcome."
 license = "MIT/Apache-2.0"
 edition = "2024"
+repository = "https://github.com/skullim/actio"
+categories = ["asynchronous", "rust-patterns", "science::robotics"]
 
+exclude = [".github/", "docs/"]
 
 [dependencies]
 futures = "0.3.31"

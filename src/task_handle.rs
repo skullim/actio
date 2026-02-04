@@ -6,7 +6,7 @@ use crate::{
 use futures::channel::oneshot;
 use std::result::Result as StdResult;
 
-/// Handle for a server task wired to a particular channel factory (CF)  and  [`ServerConcept`] implementation,
+/// Handle for a server task wired to a particular channel factory `CF`  and  [`ServerConcept`] implementation.
 pub type TaskHandle<S, CF> = GenericTaskHandle<
     oneshot::Receiver<ServerOutcome<S>>,
     <CF as CancelChannelFactory>::Sender,
