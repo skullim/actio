@@ -21,7 +21,7 @@ If you want long-running async tasks with a client↔server shape but you don’
 ### Things to keep in mind
 When implementing `ServerConcept::create` the provided task must be cancellation-correct: if the task is dropped/aborted at an `await` point, it must not leave your system in an invalid state (e.g. half-written files, leaked permits/locks, corrupted in-memory invariants, or “committed” side effects without recording them).
 
-A good deep dive on this (including the difference between “cancel-safe” operations and broader cancellation correctness) is Rain’s post: https://sunshowers.io/posts/cancelling-async-rust.
+A good deep dive on this (including the difference between “cancel-safe” operations and broader cancellation correctness) is Rain’s post: <https://sunshowers.io/posts/cancelling-async-rust>.
 
 ## Quickstart
 

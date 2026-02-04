@@ -10,6 +10,7 @@ use crate::{
 pub struct Factory;
 
 impl Factory {
+    #[must_use]
     pub fn stateless<S, CF>(
         task_queue_buffer: usize,
     ) -> (
@@ -28,6 +29,7 @@ impl Factory {
         )
     }
 
+    #[must_use]
     pub fn stateful<S, CF>(
         task_queue_buffer: usize,
     ) -> (

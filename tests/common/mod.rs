@@ -12,7 +12,7 @@ where
     S: ServerConcept,
 {
     tokio::select! {
-        _ = executor.execute() => {
+        () = executor.execute() => {
             panic!("executor should never finish before outcome handle")
         },
         outcome = recv => {
@@ -94,14 +94,14 @@ pub mod impls {
 
             fn create(&mut self, goal: Self::Goal) -> ServerTask<Self> {
                 let task = async move {
-                    let bytes = do_work(&goal.target).await;
+                    let bytes = do_work(&goal.target);
                     Outcome::Succeed(MySucceedOutput { bytes })
                 };
                 ServerTask::<Self>::new(Box::pin(task))
             }
         }
 
-        async fn do_work(target: &str) -> usize {
+        fn do_work(target: &str) -> usize {
             target.len()
         }
     }

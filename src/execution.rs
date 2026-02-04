@@ -31,15 +31,13 @@ impl Executor {
 
             select! {
                 task = self.task_receiver.next() => {
-                    match task {
-                        Some(task) => {
+                    if let Some(task) = task {
                             trace!("pushing new task");
                             self.tasks.push(task);
-                        }
-                        None => {
+                    }
+                    else {
                             warn!("task channel closed, no new tasks can be sent");
                             break;
-                        }
                     }
 
                 },

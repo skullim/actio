@@ -18,6 +18,6 @@ jobs:
     - name: Format
       run: cargo fmt --all --check
     - name: Clippy
-      run: cargo clippy -- -D warnings
+      run: cargo clippy --lib -- -D clippy::pedantic -W clippy::missing-errors-doc
     - name: Run tests
       run: cargo test --verbose

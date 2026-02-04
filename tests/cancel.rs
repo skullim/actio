@@ -31,7 +31,7 @@ async fn request_cancel_test() {
     let (outcome_recv, _) = handle.cancel();
 
     let out = await_outcome::<TestServer>(outcome_recv, &mut executor).await;
-    assert!(matches!(out, Outcome::Cancelled(_)));
+    assert!(matches!(out, Outcome::Cancelled(())));
 }
 
 #[tokio::test]

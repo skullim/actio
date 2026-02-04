@@ -54,7 +54,7 @@ impl<T> CancelSenderMarker for oneshot::Sender<T> {}
 
 impl SendCancel for oneshot::Sender<()> {
     fn send(self) -> Result<()> {
-        self.send(()).map_err(|_| Error::CancelSendFailure)
+        self.send(()).map_err(|()| Error::CancelSendFailure)
     }
 }
 
@@ -98,10 +98,7 @@ where
         Self { handle }
     }
 
-    pub fn into_visitable_outcome<'a>(
-        self,
-        server: &'a mut S,
-    ) -> VisitableOutcome<'a, S, ServerOutcome<S>>
+    pub fn into_visitable_outcome(self, server: &mut S) -> VisitableOutcome<'_, S, ServerOutcome<S>>
     where
         S: VisitOutcome,
     {
@@ -115,11 +112,14 @@ pub struct VisitableOutcome<'a, S, O> {
     receiver: oneshot::Receiver<O>,
 }
 
-impl<'a, S> VisitableOutcome<'a, S, ServerOutcome<S>>
+impl<S> VisitableOutcome<'_, S, ServerOutcome<S>>
 where
     S: VisitOutcome,
 {
     pub async fn outcome(self) -> StdResult<ServerOutcome<S>, S::Error> {
+        #[expect(clippy::missing_panics_doc, reason = "infallible")]
+        // awaiting receiver can only fail if sender part is dropped. Since sender is always part of
+        // executed task this can never happen
         let outcome = self.receiver.await.unwrap();
         self.server.visit(&outcome)?;
         Ok(outcome)
@@ -132,10 +132,7 @@ where
     CF: CancelChannelFactory<Sender = WithCancel<CS>>,
     CS: SendCancel,
 {
-    pub async fn cancel<'a>(
-        self,
-        server: &'a mut S,
-    ) -> (VisitableOutcome<'a, S, ServerOutcome<S>>, S::Feedback)
+    pub fn cancel(self, server: &mut S) -> (VisitableOutcome<'_, S, ServerOutcome<S>>, S::Feedback)
     where
         S: VisitOutcome,
     {

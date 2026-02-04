@@ -14,7 +14,7 @@ pub trait SubmitGoal<G> {
     fn submit(&mut self, server: &mut Self::Server, goal: G) -> Result<Self::TaskHandle>;
 }
 
-pub(crate) struct GoalSubmitter<S, CF> {
+pub struct GoalSubmitter<S, CF> {
     task_sender: Sender<TaskPin>,
     phantom: PhantomData<(S, CF)>,
 }
@@ -48,7 +48,7 @@ where
 
         let task = async move {
             let outcome = tokio::select! {
-                _ = cancel_receiver.recv() => {
+                () = cancel_receiver.recv() => {
                     let snapshot = snapshot_receiver.recv();
                     Outcome::Cancelled(snapshot)
                 }
@@ -69,7 +69,7 @@ where
     }
 }
 
-pub(crate) struct StatefulGoalSubmitter<S, CF> {
+pub struct StatefulGoalSubmitter<S, CF> {
     submitter: GoalSubmitter<S, CF>,
 }
 
@@ -117,7 +117,7 @@ impl CancelReceiver for oneshot::Receiver<()> {
         // hence at this stage the cancel capability is downgraded into NoCancel
         if self.await.is_err() {
             let downgraded = NoCancelReceiver {};
-            downgraded.recv().await
+            downgraded.recv().await;
         }
     }
 }
