@@ -133,7 +133,7 @@ impl CancelReceiver for NoCancelReceiver {
     }
 }
 
-/// Cancellation-disabled channel factory
+/// Cancellation-disabled channel factory.
 pub struct NoCancelChannel;
 
 impl CancelChannelFactory for NoCancelChannel {
@@ -143,7 +143,7 @@ impl CancelChannelFactory for NoCancelChannel {
     }
 }
 
-/// Cancellation-enabled channel factory (one-shot cancel)
+/// Cancellation-enabled channel factory (one-shot cancel).
 pub struct CancelChannel;
 
 impl CancelChannelFactory for CancelChannel {

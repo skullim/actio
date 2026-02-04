@@ -23,7 +23,7 @@ impl Executor {
             tasks: FuturesUnordered::new(),
         }
     }
-    /// Poll submitted tasks
+    /// Poll submitted tasks and task receiver.
     pub async fn execute(&mut self) {
         loop {
             let next_task_poll_fn = poll_fn(|cx| {

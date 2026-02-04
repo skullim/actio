@@ -11,6 +11,7 @@ mod task_handle;
 type TaskBox = Box<dyn Future<Output = ()> + Send + 'static>;
 pub(crate) type TaskPin = Pin<TaskBox>;
 
+/// Public error type.
 #[derive(Debug, ThisError)]
 pub enum Error {
     #[error("executor task queue is full")]
@@ -19,14 +20,15 @@ pub enum Error {
     CancelSendFailure,
 }
 
+/// Public result type.
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub use execution::Executor;
 pub use factory::Factory;
 pub use server::{
     FeedbackReceiverMarker, NoFeedback, NoTaskStateSnapshot, Outcome, ServerConcept, ServerOutcome,
-    ServerSnapshot, ServerTask, VisitOutcome, WithFeedback, WithFeedbackWatch,
-    WithTaskStateSnapshot, WithTaskStateSnapshotWatch,
+    ServerSnapshot, ServerTask, TaskStateSnapshotReceiver, VisitOutcome, WithFeedback,
+    WithFeedbackWatch, WithTaskStateSnapshot, WithTaskStateSnapshotWatch,
 };
 pub use submitting::{CancelChannel, NoCancelChannel, SubmitGoal};
-pub use task_handle::{NoCancel, StatefulTaskHandle, TaskHandle, VisitableOutcome, WithCancel};
+pub use task_handle::{StatefulTaskHandle, TaskHandle, VisitableOutcome};

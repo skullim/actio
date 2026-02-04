@@ -43,11 +43,13 @@ mod sealed {
     pub trait Sealed {}
 }
 
+/// Marker type indicating that feedback capability is disabled.
 pub struct NoFeedback;
 impl sealed::Sealed for NoFeedback {}
 
 impl FeedbackMarker for NoFeedback {}
 
+/// Wrapper that allows to plugin custom feedback receivers, that is ones that implement [`FeedbackReceiverMarker`].
 pub struct WithFeedback<R>(pub R);
 impl<R> sealed::Sealed for WithFeedback<R> {}
 
@@ -56,6 +58,7 @@ impl<R> sealed::Sealed for WithFeedback<R> {}
 /// Note: watch has “latest value” semantics (not a buffered stream).
 pub type WithFeedbackWatch<T> = WithFeedback<watch::Receiver<T>>;
 
+/// Marker trait used to register foreign feedback receivers.
 pub trait FeedbackReceiverMarker {}
 
 impl<R> FeedbackMarker for WithFeedback<R> where R: FeedbackReceiverMarker {}
@@ -70,6 +73,8 @@ pub trait TaskStateSnapshotReceiver {
     type Snapshot: Send + 'static;
     fn recv(&mut self) -> Self::Snapshot;
 }
+
+/// Marker type indicating that task state snapshot capability is disabled.
 pub struct NoTaskStateSnapshot;
 impl TaskStateSnapshotReceiver for NoTaskStateSnapshot {
     type Snapshot = ();
@@ -89,6 +94,7 @@ where
     }
 }
 
+/// Wrapper that allows to plugin custom task state snapshot receivers, that is ones that implement [`TaskStateSnapshotReceiver`].
 pub struct WithTaskStateSnapshot<R>(pub R);
 
 /// Default task-state snapshot receiver wrapper based on `tokio::sync::watch`.
@@ -104,6 +110,8 @@ where
     }
 }
 
+/// A server task for a concrete server implementation `S`
+/// (the task future plus the server’s feedback and task state type).
 pub type ServerTask<S> = TaskWithContext<
     OutcomeFutPin<S>,
     <S as ServerConcept>::Feedback,
@@ -159,7 +167,7 @@ impl<T, FR, TR> TaskWithContext<T, FR, TR> {
 /// Optional extension trait for “stateful servers”.
 /// Implement this if you want to update server state based on the terminal [`ServerOutcome`]
 /// (e.g., on success/cancel/failure).
-/// Default implementation does nothing, only implement methods you are interested in
+/// Default implementation does nothing, only implement methods you are interested in.
 pub trait VisitOutcome: ServerConcept {
     type Error;
     fn on_succeed(&mut self, _o: &Self::Succeed) -> Result<(), Self::Error> {
