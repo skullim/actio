@@ -1,10 +1,8 @@
-use tokio::sync::mpsc::Receiver;
-
-use futures::StreamExt;
-use futures::stream::FuturesUnordered;
+use futures::{StreamExt, channel::mpsc::Receiver, stream::FuturesUnordered};
 use std::future::poll_fn;
 use std::task::Poll;
-use tracing::trace;
+use tokio::select;
+use tracing::{trace, warn};
 
 use crate::TaskPin;
 
@@ -23,7 +21,7 @@ impl Executor {
 
     pub async fn execute(&mut self) {
         loop {
-            let execute_next_task_fut = poll_fn(|cx| {
+            let next_task_poll_fn = poll_fn(|cx| {
                 if self.tasks.is_empty() {
                     Poll::Pending
                 } else {
@@ -31,22 +29,23 @@ impl Executor {
                 }
             });
 
-            tokio::select! {
-                task = self.task_receiver.recv() => {
+            select! {
+                task = self.task_receiver.next() => {
                     match task {
                         Some(task) => {
                             trace!("pushing new task");
                             self.tasks.push(task);
                         }
                         None => {
-                            trace!("task channel closed");
+                            warn!("task channel closed, no new tasks can be sent");
                             break;
                         }
                     }
 
                 },
-                _ = execute_next_task_fut => {
+                _ = next_task_poll_fn => {
                     trace!("finished executing task");
+
                 },
             }
         }

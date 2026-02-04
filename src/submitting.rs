@@ -5,8 +5,7 @@ use crate::task_handle::{
     CancelConfigMarker, NoCancel, StatefulTaskHandle, TaskHandle, WithCancel,
 };
 use crate::{Error, Result, TaskPin};
-use tokio::sync::mpsc::Sender;
-use tokio::sync::oneshot;
+use futures::channel::{mpsc::Sender, oneshot};
 
 pub trait SubmitGoal<G> {
     type TaskHandle;
@@ -60,7 +59,7 @@ where
 
         self.task_sender
             .try_send(Box::pin(task))
-            .map_err(|_| Error::FullExecutor)?;
+            .map_err(|_| Error::FullTaskQueue)?;
 
         Ok(Self::TaskHandle::new(
             outcome_receiver,
@@ -98,7 +97,7 @@ struct OutcomeChannelFactory;
 
 impl OutcomeChannelFactory {
     fn channel<O>() -> (oneshot::Sender<O>, oneshot::Receiver<O>) {
-        tokio::sync::oneshot::channel()
+        oneshot::channel()
     }
 }
 
@@ -145,7 +144,7 @@ pub struct CancelChannel;
 impl CancelChannelFactory for CancelChannel {
     type Sender = WithCancel<oneshot::Sender<()>>;
     fn channel() -> (Self::Sender, impl CancelReceiver) {
-        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let (sender, receiver) = oneshot::channel();
         (WithCancel::new(sender), receiver)
     }
 }

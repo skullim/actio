@@ -1,4 +1,4 @@
-use tokio::sync::mpsc::channel;
+use futures::channel::mpsc::channel;
 
 use crate::{
     execution::Executor,

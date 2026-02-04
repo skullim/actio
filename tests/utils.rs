@@ -1,10 +1,11 @@
 use actio::{Executor, ServerConcept, ServerOutcome};
+use futures::channel::oneshot;
 
 pub const STANDARD_TASK_QUEUE_SIZE: usize = 16;
 pub const STRESS_TEST_TASK_QUEUE_SIZE: usize = 10_000;
 
 pub async fn await_outcome<S>(
-    recv: tokio::sync::oneshot::Receiver<ServerOutcome<S>>,
+    recv: oneshot::Receiver<ServerOutcome<S>>,
     executor: &mut Executor,
 ) -> ServerOutcome<S>
 where

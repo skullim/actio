@@ -3,11 +3,11 @@ use crate::{
     server::{ServerConcept, ServerOutcome, VisitOutcome, WithFeedback},
     submitting::CancelChannelFactory,
 };
+use futures::channel::oneshot;
 use std::result::Result as StdResult;
-use tokio::sync::oneshot;
 
 pub type TaskHandle<S, CF> = GenericTaskHandle<
-    tokio::sync::oneshot::Receiver<ServerOutcome<S>>,
+    oneshot::Receiver<ServerOutcome<S>>,
     <CF as CancelChannelFactory>::Sender,
     <S as ServerConcept>::Feedback,
 >;
@@ -50,9 +50,9 @@ pub trait SendCancel {
     fn send(self) -> Result<()>;
 }
 
-impl<T> CancelSenderMarker for tokio::sync::oneshot::Sender<T> {}
+impl<T> CancelSenderMarker for oneshot::Sender<T> {}
 
-impl SendCancel for tokio::sync::oneshot::Sender<()> {
+impl SendCancel for oneshot::Sender<()> {
     fn send(self) -> Result<()> {
         self.send(()).map_err(|_| Error::CancelSendFailure)
     }

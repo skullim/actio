@@ -13,7 +13,7 @@ pub(crate) type TaskPin = Pin<TaskBox>;
 #[derive(Debug, ThisError)]
 pub enum Error {
     #[error("executor task queue is full")]
-    FullExecutor,
+    FullTaskQueue,
     #[error("failed to send cancel request")]
     CancelSendFailure,
 }
